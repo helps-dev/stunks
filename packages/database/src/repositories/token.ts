@@ -248,6 +248,25 @@ export class TokenRepository {
     return rows.map((row) => row.curveAddress);
   }
 
+  /**
+   * Earliest block at which any tracked curve existed.
+   *
+   * The curve stream has no reason to scan before this: a curve cannot emit a trade
+   * before it is deployed. Without this the stream started at the factory deploy
+   * block and burned ~44 hours scanning 36.8M blocks that could not contain a single
+   * matching log.
+   *
+   * Returns null when nothing is indexed yet, so the caller can wait rather than
+   * defaulting to genesis.
+   */
+  async earliestLaunchBlock(chainId: number): Promise<bigint | null> {
+    const row = await this.prisma.token.aggregate({
+      where: { chainId },
+      _min: { launchBlock: true },
+    });
+    return row._min.launchBlock ?? null;
+  }
+
   async deleteAboveBlock(chainId: number, blockNumber: bigint): Promise<number> {
     const result = await this.prisma.token.deleteMany({
       where: { chainId, launchBlock: { gt: blockNumber } },

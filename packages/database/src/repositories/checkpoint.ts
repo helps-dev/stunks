@@ -114,6 +114,41 @@ export class CheckpointRepository {
     });
   }
 
+  /**
+   * Skip forward over a range that provably cannot contain anything for this stream.
+   *
+   * The one legitimate use is the curve stream: a curve cannot emit a trade before it
+   * is deployed, so every block before the earliest known launch is guaranteed empty.
+   * Scanning them anyway cost ~44 hours of wasted work.
+   *
+   * Separate from `advance` on purpose. `advance` means "these blocks were processed";
+   * this means "these blocks were skipped, and here is why". Conflating them would
+   * make it impossible to tell a genuine scan from a shortcut, and the block hash is
+   * deliberately left null because nothing was verified.
+   */
+  async fastForward(args: {
+    chainId: number;
+    stream: string;
+    toBlock: bigint;
+    reason: string;
+  }): Promise<CheckpointState | null> {
+    const current = await this.prisma.indexerState.findUnique({
+      where: { chainId_stream: { chainId: args.chainId, stream: args.stream } },
+    });
+    // Never a rewind, and never a no-op write.
+    if (!current || current.lastProcessedBlock >= args.toBlock) return current;
+
+    return this.prisma.indexerState.update({
+      where: { chainId_stream: { chainId: args.chainId, stream: args.stream } },
+      data: {
+        lastProcessedBlock: args.toBlock,
+        lastProcessedBlockHash: null,
+        lastError: `Fast-forwarded to ${args.toBlock}: ${args.reason}`,
+        lastErrorAt: new Date(),
+      },
+    });
+  }
+
   async recordError(chainId: number, stream: string, error: string): Promise<void> {
     await this.prisma.indexerState.update({
       where: { chainId_stream: { chainId, stream } },

@@ -163,6 +163,20 @@ async function main(): Promise<void> {
           STREAMS.factory,
           config.startBlock,
         );
+
+        // Skip the range before any curve existed. A curve cannot emit a trade
+        // before it is deployed, so scanning those blocks is provably pointless —
+        // and it was measured at ~44 hours of empty scanning.
+        const earliest = await repos.tokens.earliestLaunchBlock(config.CHAIN_ID);
+        if (earliest !== null) {
+          await repos.checkpoints.fastForward({
+            chainId: config.CHAIN_ID,
+            stream: STREAMS.curves,
+            toBlock: earliest - 1n,
+            reason: "no curve existed before the earliest indexed launch",
+          });
+        }
+
         return state.lastProcessedBlock;
       },
       log,
@@ -171,6 +185,7 @@ async function main(): Promise<void> {
           client: client as PublicClient,
           repos,
           chainId: config.CHAIN_ID,
+          factory: config.factory,
           blockTimes,
           log,
         });

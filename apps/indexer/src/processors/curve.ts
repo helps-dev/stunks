@@ -1,6 +1,6 @@
 import type { Address, PublicClient } from "viem";
 import type { Repositories } from "@stunks/database";
-import { decodePonsLog, readCurveState } from "@stunks/pons";
+import { decodePonsLog, readCurveState, readLaunchedToken } from "@stunks/pons";
 import { ratioBps } from "@stunks/utils";
 import type { BlockTimeCache } from "../block-cache.js";
 import {
@@ -33,6 +33,8 @@ export interface CurveProcessorDeps {
   readonly client: PublicClient;
   readonly repos: Repositories;
   readonly chainId: number;
+  /** Needed to confirm a phase change from the factory record. */
+  readonly factory: Address;
   readonly blockTimes: BlockTimeCache;
   readonly log: (message: string, meta?: Record<string, unknown>) => void;
   /** Minimum trade size to count toward competition volume. */
@@ -81,6 +83,29 @@ export async function processCurveLogs(
     });
 
     if (!decoded) continue;
+
+    /**
+     * The curve, not the factory, emits these. A factory-only processor would never
+     * see them — and `AutoGraduationFailed` is precisely the signal that a token is
+     * stuck in `Swept` with no tradeable venue, which is the state most likely to
+     * strand users if the app does not know about it.
+     */
+    if (decoded.name === "AutoGraduationFailed" || decoded.name === "CurveCompleted") {
+      const token = await deps.repos.tokens.findByCurve(deps.chainId, raw.address);
+      if (token) {
+        // The event says something changed; the chain says what it changed to.
+        await syncPhaseFromChain(token.id, token.address, deps);
+        if (decoded.name === "AutoGraduationFailed") {
+          deps.log("auto-graduation FAILED — token may be stuck awaiting its pool", {
+            token: token.address,
+            block: raw.blockNumber.toString(),
+            gasRemaining: String(decoded.args.gasRemaining ?? ""),
+          });
+        }
+      }
+      continue;
+    }
+
     if (decoded.name !== "CurveBuy" && decoded.name !== "CurveSell") continue;
 
     const curveKey = raw.address.toLowerCase();
@@ -231,6 +256,40 @@ export async function refreshTokenStats(
     sellCount: aggregate.sellCount,
     ...(lastTrade ? { lastTradeAt: lastTrade.timestamp } : {}),
   });
+}
+
+/**
+ * Re-read a token's phase from the chain and persist it if it moved.
+ *
+ * The phase is never inferred from which event arrived. `Swept` is reachable without
+ * a successful graduation, so trusting an event over the factory record could put the
+ * app into a venue it cannot trade.
+ */
+async function syncPhaseFromChain(
+  tokenId: string,
+  tokenAddress: string,
+  deps: CurveProcessorDeps,
+): Promise<void> {
+  try {
+    const launch = await readLaunchedToken(
+      deps.client,
+      deps.factory,
+      tokenAddress as Address,
+    );
+    if (!launch.exists) return;
+
+    const dbPhase = (["NOT_GRADUATED", "SWEPT", "POOL_CREATED", "RESCUED"] as const)[
+      launch.phase
+    ];
+    if (!dbPhase) return;
+
+    await deps.repos.tokens.setPhase(tokenId, dbPhase);
+  } catch (error) {
+    deps.log("phase sync failed", {
+      token: tokenAddress,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /** Volume of one trade, exported so the scanner can log throughput meaningfully. */
