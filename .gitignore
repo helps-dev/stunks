@@ -1,0 +1,36 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# env — never commit secrets
+.env
+.env.*
+!.env.example
+
+# test / coverage
+coverage/
+.vitest/
+
+# turbo
+.turbo/
+
+# prisma generated client
+packages/database/generated/
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# os / editor
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/settings.json

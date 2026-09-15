@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "paths": {
+      "@stunks/config": ["./packages/config/src/index.ts"],
+      "@stunks/types": ["./packages/types/src/index.ts"],
+      "@stunks/utils": ["./packages/utils/src/index.ts"],
+      "@stunks/web3": ["./packages/web3/src/index.ts"],
+      "@stunks/pons": ["./packages/pons/src/index.ts"],
+      "@stunks/database": ["./packages/database/src/index.ts"]
+    }
+  },
+  "include": ["scripts/**/*.ts"]
+}

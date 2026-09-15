@@ -1,0 +1,600 @@
+// STUNKS.FUN database schema
+//
+// Three principles, each one a direct consequence of the Phase 0 audit:
+//
+// 1. MONEY IS AN INTEGER. Every token amount, price, reserve, fee and volume is
+//    Decimal @db.Decimal(78, 0) — a uint256 has 78 decimal digits, and zero
+//    fractional digits because these are base units, not human amounts. Nothing
+//    financial is a Float or an Int anywhere in this file.
+//
+// 2. TRUST LEVELS ARE SEPARATED. Columns are grouped and commented by whether they
+//    are on-chain canonical (authoritative, re-readable), indexed-derived
+//    (computed by us from events), or moderation metadata (ours alone, never a
+//    substitute for chain truth). Mixing them is how a UI ends up trusting a
+//    database over the blockchain.
+//
+// 3. INDEXING IS IDEMPOTENT. Every event-derived row carries
+//    (chainId, transactionHash, logIndex) with a unique constraint, so a restart,
+//    a replay or an overlapping scan window cannot double-count a trade.
+
+generator client {
+  provider = "prisma-client-js"
+  // Default output. @stunks/database imports from "@prisma/client", so the
+  // generated client must live where that package re-exports it from.
+  // A custom output path would require importing the generated directory directly,
+  // which couples every consumer to a build artefact path.
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enums — values mirror the on-chain Solidity enum exactly.
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum GraduationPhase {
+  NOT_GRADUATED // 0 — trading on the bonding curve
+  SWEPT // 1 — curve drained, V4 pool NOT yet created: no tradeable venue
+  POOL_CREATED // 2 — graduated to Uniswap V4
+  RESCUED // 3 — terminal, reserves released manually
+}
+
+enum TradeSide {
+  BUY
+  SELL
+}
+
+enum TradeVenue {
+  CURVE
+  UNISWAP_V4
+}
+
+/// Moderation state. Deliberately separate from anything on-chain.
+/// VERIFIED does not mean "safe" — it means the creator identity was checked.
+enum ModerationStatus {
+  NORMAL
+  FEATURED
+  VERIFIED
+  HIDDEN
+  FLAGGED
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Token
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Token {
+  id      String @id @default(cuid())
+  chainId Int
+  address String
+
+  // ── on-chain canonical: metadata set at launch ──
+  name        String
+  symbol      String
+  decimals    Int    @default(18)
+  imageUrl    String?
+  description String?
+
+  websiteUrl   String?
+  twitterUrl   String?
+  telegramUrl  String?
+  discordUrl   String?
+  farcasterUrl String?
+
+  // ── on-chain canonical: the launch record ──
+  creatorAddress      String
+  deployerAddress     String
+  curveAddress        String
+  /// Quote asset. Zero address means native ETH. May be a tokenized stock, and
+  /// decimals vary — USDG uses 6, not 18.
+  pairTokenAddress    String
+  pairTokenDecimals   Int    @default(18)
+  launchConfigId      BigInt
+
+  totalSupply         Decimal @db.Decimal(78, 0)
+  creatorTaxBps       Int
+  buybackEnabled      Boolean
+  graduationThreshold Decimal @db.Decimal(78, 0)
+
+  /// Snapshotted at launch so a later config edit cannot move the pool.
+  poolFee     Int
+  tickSpacing Int
+
+  /// Curve constant: supply * phantomQuote / (phantomQuote + graduationThreshold).
+  /// The curve never sells below this; it seeds the graduated pool.
+  phantomQuote   Decimal @db.Decimal(78, 0)
+  reservedTokens Decimal @db.Decimal(78, 0)
+
+  /// Anti-snipe window for this curve. Per-curve and owner-mutable at the factory,
+  /// so this is a cached read, not a constant.
+  snipeTaxStartBps Int?
+  snipeTaxSeconds  Int?
+  launchedAt       DateTime?
+
+  phase GraduationPhase @default(NOT_GRADUATED)
+
+  // ── indexed-derived: recomputed from events, never authoritative ──
+  /// Real quote reserve only (excludes the virtual phantom reserve). This is the
+  /// graduation-progress reserve, NOT the pricing reserve.
+  realQuoteReserve Decimal @default(0) @db.Decimal(78, 0)
+  graduationBps    Int     @default(0)
+
+  /// Last traded price, quote base units per 1e18 token base units.
+  price       Decimal @default(0) @db.Decimal(78, 0)
+  marketCap   Decimal @default(0) @db.Decimal(78, 0)
+  volume24h   Decimal @default(0) @db.Decimal(78, 0)
+  volumeTotal Decimal @default(0) @db.Decimal(78, 0)
+  holderCount Int     @default(0)
+  tradeCount  Int     @default(0)
+  buyCount    Int     @default(0)
+  sellCount   Int     @default(0)
+
+  /// Trending score, recomputed by a scheduled job with configurable weights.
+  trendingScore Decimal @default(0) @db.Decimal(20, 8)
+
+  // ── moderation metadata: ours, and never a substitute for chain truth ──
+  moderationStatus ModerationStatus @default(NORMAL)
+  moderationNote   String?
+
+  /// True when this launch declared a snipe-tax exemption list. Disclosed on the
+  /// token page: traders deserve to know the opening distribution was concentrated.
+  hadWhitelistBundle Boolean @default(false)
+  whitelistSize      Int     @default(0)
+
+  launchBlock     BigInt
+  launchTxHash    String
+  firstTradeAt    DateTime?
+  lastTradeAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  creator   Creator @relation(fields: [creatorId], references: [id])
+  creatorId String
+
+  trades    Trade[]
+  holders   Holder[]
+  transfers TokenTransfer[]
+  pool      Pool?
+  snapshots VolumeSnapshot[]
+  feeEvents FeeEvent[]
+  candles   Candle[]
+
+  @@unique([chainId, address])
+  @@unique([chainId, curveAddress])
+  // Explore and discovery query shapes.
+  @@index([chainId, phase, volume24h(sort: Desc)])
+  @@index([chainId, phase, marketCap(sort: Desc)])
+  @@index([chainId, createdAt(sort: Desc)])
+  @@index([chainId, trendingScore(sort: Desc)])
+  @@index([chainId, phase, graduationBps(sort: Desc)])
+  @@index([creatorId])
+  @@index([moderationStatus])
+  @@map("tokens")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trade — one row per CurveBuy / CurveSell / V4 Swap
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Trade {
+  id String @id @default(cuid())
+
+  chainId         Int
+  transactionHash String
+  logIndex        Int
+  blockNumber     BigInt
+  /// Kept so a reorg can be detected by parent-hash discontinuity.
+  blockHash       String
+
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  tokenId String
+
+  /// Curve address pre-graduation; null once trades come from the V4 PoolManager.
+  curveAddress String?
+  /// Which venue produced this row. The same token's volume comes from two
+  /// different sources over its life, so this must be recorded, not inferred.
+  venue        TradeVenue @default(CURVE)
+
+  /// Who sent the transaction.
+  traderAddress String
+  /// Who received the tokens. Distinct from trader on purpose: the anti-snipe tax
+  /// is evaluated per recipient, and bundle buys have one payer and many recipients.
+  recipientAddress String
+  side             TradeSide
+
+  tokenAmount Decimal @db.Decimal(78, 0)
+  quoteAmount Decimal @db.Decimal(78, 0)
+
+  feeAmount        Decimal @db.Decimal(78, 0)
+  creatorTaxAmount Decimal @db.Decimal(78, 0)
+  /// Anti-snipe tax paid. Non-zero only for non-exempt recipients inside the window.
+  snipeTaxAmount   Decimal @default(0) @db.Decimal(78, 0)
+  /// Surplus returned when a buy was clamped to reservedTokens (CurveBuyRefunded).
+  refundAmount     Decimal @default(0) @db.Decimal(78, 0)
+
+  price     Decimal @db.Decimal(78, 0)
+  marketCap Decimal @db.Decimal(78, 0)
+
+  /// Excluded from competition volume — self-trades, bundle recipients,
+  /// admin-excluded wallets. Recorded rather than deleted so the decision is auditable.
+  excludedFromCompetition Boolean @default(false)
+  exclusionReason         String?
+
+  timestamp DateTime
+  createdAt DateTime @default(now())
+
+  // The idempotency key. This is what makes indexer restarts safe.
+  @@unique([chainId, transactionHash, logIndex])
+  @@index([tokenId, timestamp(sort: Desc)])
+  @@index([traderAddress, timestamp(sort: Desc)])
+  @@index([tokenId, side, timestamp(sort: Desc)])
+  @@index([chainId, blockNumber])
+  @@index([timestamp(sort: Desc)])
+  @@map("trades")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Holders and transfers
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Holder {
+  id String @id @default(cuid())
+
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  tokenId String
+
+  walletAddress String
+  balance       Decimal @db.Decimal(78, 0)
+
+  /// True for the curve, locker, buyback vault and pool. Excluded from holder
+  /// counts and distribution charts, since they are protocol accounts rather
+  /// than holders.
+  isProtocolAccount Boolean @default(false)
+
+  firstSeenAt   DateTime @default(now())
+  lastUpdatedAt DateTime @updatedAt
+
+  @@unique([tokenId, walletAddress])
+  @@index([tokenId, balance(sort: Desc)])
+  @@map("holders")
+}
+
+model TokenTransfer {
+  id String @id @default(cuid())
+
+  chainId         Int
+  transactionHash String
+  logIndex        Int
+  blockNumber     BigInt
+
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  tokenId String
+
+  fromAddress String
+  toAddress   String
+  amount      Decimal @db.Decimal(78, 0)
+
+  /// Mint and burn are transfers to/from the zero address and must not be counted
+  /// as holder movements.
+  isMint Boolean @default(false)
+  isBurn Boolean @default(false)
+
+  timestamp DateTime
+
+  @@unique([chainId, transactionHash, logIndex])
+  @@index([tokenId, timestamp(sort: Desc)])
+  @@map("token_transfers")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Creator
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Creator {
+  id      String @id @default(cuid())
+  chainId Int
+  address String
+
+  tokenCount       Int     @default(0)
+  graduatedCount   Int     @default(0)
+  totalVolume      Decimal @default(0) @db.Decimal(78, 0)
+
+  /// Fees credited to this creator, from indexed FeesSwept events only.
+  /// Not shown as claimable until the fee-escrow surface is verified.
+  totalFeesIndexed Decimal @default(0) @db.Decimal(78, 0)
+
+  tokens Token[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([chainId, address])
+  @@index([chainId, totalVolume(sort: Desc)])
+  @@map("creators")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pool — the Uniswap V4 pool a graduated token trades in
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Pool {
+  id String @id @default(cuid())
+
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  tokenId String @unique
+
+  /// V4 pool id, from the hook's PoolRegistered event. Required to filter
+  /// PoolManager swaps, which are emitted by the singleton rather than per pool.
+  poolId String
+
+  currency0   String
+  currency1   String
+  hookAddress String
+  poolFee     Int
+  tickSpacing Int
+
+  /// Locked V4 position NFT. There is no withdrawal path on the locker.
+  positionId    Decimal? @db.Decimal(78, 0)
+  lockedTokens  Decimal? @db.Decimal(78, 0)
+  seededQuote   Decimal? @db.Decimal(78, 0)
+
+  graduatedAt      DateTime
+  graduationTxHash String
+
+  @@unique([poolId])
+  @@index([currency0, currency1])
+  @@map("pools")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Aggregates
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Rolling window aggregates for trending and stats. `venue` is recorded because
+/// pre- and post-graduation volume come from different sources.
+model VolumeSnapshot {
+  id String @id @default(cuid())
+
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  tokenId String
+
+  windowStart DateTime
+  windowEnd   DateTime
+  venue       TradeVenue
+
+  volume        Decimal @db.Decimal(78, 0)
+  buyVolume     Decimal @db.Decimal(78, 0)
+  sellVolume    Decimal @db.Decimal(78, 0)
+  tradeCount    Int
+  uniqueTraders Int
+
+  openPrice  Decimal @db.Decimal(78, 0)
+  closePrice Decimal @db.Decimal(78, 0)
+
+  createdAt DateTime @default(now())
+
+  @@unique([tokenId, windowStart, venue])
+  @@index([tokenId, windowStart(sort: Desc)])
+  @@map("volume_snapshots")
+}
+
+/// OHLC candles aggregated from indexed trades. Never from a third-party feed.
+model Candle {
+  id String @id @default(cuid())
+
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  tokenId String
+
+  /// Interval in seconds: 60, 300, 900, 3600, 14400, 86400.
+  interval  Int
+  openTime  DateTime
+
+  open  Decimal @db.Decimal(78, 0)
+  high  Decimal @db.Decimal(78, 0)
+  low   Decimal @db.Decimal(78, 0)
+  close Decimal @db.Decimal(78, 0)
+
+  volume     Decimal @db.Decimal(78, 0)
+  tradeCount Int
+
+  @@unique([tokenId, interval, openTime])
+  @@index([tokenId, interval, openTime(sort: Desc)])
+  @@map("candles")
+}
+
+/// Fee events from the curve and hook. Analytics only.
+/// No row here implies STUNKS revenue: Pons V2 routes nothing to third-party
+/// interfaces, which was verified against the live fee policy.
+model FeeEvent {
+  id String @id @default(cuid())
+
+  chainId         Int
+  transactionHash String
+  logIndex        Int
+  blockNumber     BigInt
+
+  token   Token  @relation(fields: [tokenId], references: [id], onDelete: Cascade)
+  tokenId String
+
+  /// FeesSwept, BuybackLocked, HookFeeCollected, PoolFeesSwept.
+  eventName String
+
+  protocolAmount Decimal @default(0) @db.Decimal(78, 0)
+  creatorAmount  Decimal @default(0) @db.Decimal(78, 0)
+  buybackAmount  Decimal @default(0) @db.Decimal(78, 0)
+  /// Always zero in V1. Kept so a future verified fee route needs no migration.
+  platformAmount Decimal @default(0) @db.Decimal(78, 0)
+
+  timestamp DateTime
+
+  @@unique([chainId, transactionHash, logIndex])
+  @@index([tokenId, timestamp(sort: Desc)])
+  @@map("fee_events")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Indexer state
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Checkpoint per chain and stream. `lastProcessedBlockHash` exists so a reorg is
+/// detected by parent-hash discontinuity rather than assumed away — the practical
+/// reorg depth on this Orbit L2 is not documented anywhere we could verify.
+model IndexerState {
+  id String @id @default(cuid())
+
+  chainId Int
+  /// e.g. "factory", "curves", "v4-pool-manager", "transfers".
+  stream  String
+
+  lastProcessedBlock     BigInt
+  lastProcessedBlockHash String?
+  /// Confirmation depth applied before a block is treated as final.
+  confirmationDepth      Int    @default(12)
+
+  /// Adaptive eth_getLogs window. Endpoints disagree about their real limits and
+  /// report them misleadingly, so the working value is learned and persisted.
+  logWindowSize Int @default(100)
+
+  lastSuccessAt DateTime?
+  lastErrorAt   DateTime?
+  lastError     String?
+  isPaused      Boolean   @default(false)
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([chainId, stream])
+  @@map("indexer_state")
+}
+
+/// Blocks that failed processing, for bounded retry. A permanently failing block
+/// must be visible, not silently skipped.
+model FailedBlock {
+  id String @id @default(cuid())
+
+  chainId     Int
+  stream      String
+  blockNumber BigInt
+
+  attempts    Int      @default(1)
+  lastError   String
+  firstFailedAt DateTime @default(now())
+  lastFailedAt  DateTime @updatedAt
+  resolved      Boolean  @default(false)
+
+  @@unique([chainId, stream, blockNumber])
+  @@index([resolved, lastFailedAt])
+  @@map("failed_blocks")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Competition — leaderboards computed off-chain from indexed trades
+// ─────────────────────────────────────────────────────────────────────────────
+
+model Competition {
+  id String @id @default(cuid())
+
+  chainId     Int
+  slug        String
+  name        String
+  description String?
+
+  startsAt DateTime
+  endsAt   DateTime
+
+  /// Configurable anti-abuse rules. Stored rather than hardcoded so a competition
+  /// can be tightened without a deploy.
+  minTradeSize        Decimal @default(0) @db.Decimal(78, 0)
+  minTradeCount       Int     @default(1)
+  maxWalletContribution Decimal? @db.Decimal(78, 0)
+  excludedAddresses   String[] @default([])
+  /// Exclude wallets that were on a launch's snipe-tax whitelist, so a bundle
+  /// cannot farm the leaderboard.
+  excludeBundleWallets Boolean @default(true)
+
+  prizePoolDescription String?
+  isActive             Boolean @default(true)
+
+  participants CompetitionParticipant[]
+  rewards      CompetitionReward[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([chainId, slug])
+  @@index([isActive, startsAt])
+  @@map("competitions")
+}
+
+model CompetitionParticipant {
+  id String @id @default(cuid())
+
+  competition   Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  competitionId String
+
+  walletAddress String
+
+  /// Volume after exclusion rules. `rawVolume` is kept alongside so the effect of
+  /// the rules is inspectable rather than opaque.
+  qualifyingVolume Decimal @db.Decimal(78, 0)
+  rawVolume        Decimal @db.Decimal(78, 0)
+  tradeCount       Int
+  excludedVolume   Decimal @default(0) @db.Decimal(78, 0)
+
+  rank Int?
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([competitionId, walletAddress])
+  @@index([competitionId, qualifyingVolume(sort: Desc)])
+  @@map("competition_participants")
+}
+
+model CompetitionReward {
+  id String @id @default(cuid())
+
+  competition   Competition @relation(fields: [competitionId], references: [id], onDelete: Cascade)
+  competitionId String
+
+  walletAddress String
+  rank          Int
+  amount        Decimal @db.Decimal(78, 0)
+  /// Reward asset. Zero address means native ETH.
+  assetAddress  String
+
+  /// Off-chain until an on-chain distribution mechanism exists. Nothing here
+  /// implies a claimable on-chain balance.
+  claimTxHash String?
+  claimedAt   DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@unique([competitionId, rank])
+  @@index([walletAddress])
+  @@map("competition_rewards")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Admin
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Append-only audit trail. Admin can touch STUNKS moderation metadata only —
+/// never user funds, token balances, or Pons state.
+model AdminAuditLog {
+  id String @id @default(cuid())
+
+  actorAddress String
+  action       String
+  targetType   String
+  targetId     String
+  before       Json?
+  after        Json?
+  reason       String?
+
+  createdAt DateTime @default(now())
+
+  @@index([actorAddress, createdAt(sort: Desc)])
+  @@index([targetType, targetId])
+  @@map("admin_audit_log")
+}
