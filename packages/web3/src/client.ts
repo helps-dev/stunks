@@ -22,6 +22,19 @@ export interface StunksClientOptions {
   readonly chain?: Chain;
   readonly pollingIntervalMs?: number;
   readonly pool?: RpcPoolOptions;
+  /**
+   * Batch concurrent `readContract` calls into a single Multicall3 call.
+   *
+   * This is not a micro-optimisation. Measured on the indexer: reading one launch
+   * takes ~20 separate contract reads (launch record, token metadata, full curve
+   * state, pair decimals). At ~124 ms per round trip that is ~2.5 s per launch, and
+   * with launches arriving at ~13 per 226 blocks the indexer fell steadily further
+   * behind a chain that produces 10 blocks/second.
+   *
+   * Multicall3 is deployed at the canonical address on Robinhood Chain, confirmed
+   * during the Phase 0 audit.
+   */
+  readonly multicall?: boolean;
 }
 
 export interface StunksClient {
@@ -51,6 +64,18 @@ export function createStunksClient(options: StunksClientOptions): StunksClient {
     chain,
     transport: poolTransport(pool),
     pollingInterval: options.pollingIntervalMs ?? DEFAULT_POLLING_INTERVAL_MS,
+    ...(options.multicall === true
+      ? {
+          batch: {
+            multicall: {
+              // Small window: the indexer issues its reads via Promise.all, so they
+              // are already concurrent and only need a moment to be collected.
+              wait: 10,
+              batchSize: 1_024,
+            },
+          },
+        }
+      : {}),
   });
 
   let verified = false;
@@ -90,6 +115,9 @@ export function createIndexerClient(
 ): StunksClient {
   return createStunksClient({
     endpoints,
+    // Without this the indexer cannot keep pace with the chain: see the note on
+    // `multicall` above for the measurement.
+    multicall: true,
     pool: {
       strategy: "ordered",
       attemptsPerEndpoint: 3,

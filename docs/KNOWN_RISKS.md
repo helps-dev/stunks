@@ -132,6 +132,80 @@ product works without it.
 
 ---
 
+## R21 — C — Indexer throughput is below the chain's block rate
+
+Measured by running the real indexer against mainnet, not estimated:
+
+```text
+chain produces          ~10 blocks/second
+indexer sustained        2–7 blocks/second
+```
+
+So the indexer currently falls further behind over time. It indexed 716 tokens and
+392 creators correctly, with all integrity checks passing, but it cannot keep pace.
+
+Two bottlenecks were found and partly fixed:
+
+1. **~20 sequential contract reads per launch** (launch record, token metadata, full
+   curve state, pair decimals). Fixed by enabling Multicall3 batching on the indexer
+   client — Multicall3 is deployed at the canonical address on this chain. This was a
+   large improvement but not sufficient.
+2. **Two database round trips per launch.** The opening price/reserve write was folded
+   into the same insert as the launch record, halving them.
+
+What remains is dominated by **database latency to a remote serverless Postgres**
+(~2.7s per launch observed at peak). Launches arrive at roughly 13 per 226 blocks on
+this chain, which is an extraordinary rate.
+
+**Remaining remedies, in order of expected effect:**
+
+- **Co-locate the database with the indexer.** Neon is in `us-east-2`; the measurement
+  was taken from a developer machine on another continent. Removing ~300 ms per round
+  trip is plausibly a 10–50x improvement and costs nothing but a deployment choice.
+- **Batch the launch writes.** Collect a window's launches and insert them with one
+  `createMany` plus one batched creator upsert, instead of a transaction per launch.
+- **Use HyperSync for backfill** (already implemented and pluggable).
+
+**Do not treat the indexer as production-ready until it demonstrably sustains more
+than 10 blocks/second in its deployment environment.** Until then it is correct but
+not able to stay current.
+
+---
+
+## R22 — H — The curve stream scans from the factory deploy block
+
+The curve stream starts at the same block as the factory stream and scans forward
+looking for `CurveBuy` / `CurveSell` from the curves it knows about. Since curves only
+exist from their own launch block onward, every block before the earliest known launch
+is guaranteed to contain nothing for it.
+
+Observed: the curve stream scanning from block 26,842,730 at ~233 blocks/second with
+zero matching logs, which would take ~44 hours to reach the head.
+
+**Mitigation, not yet implemented:** start the curve stream at the minimum
+`launchBlock` of the tokens it tracks, and ideally track a per-curve start block so a
+newly discovered curve does not force a rescan of history that cannot concern it.
+
+---
+
+## R23 — H — A sequential two-stream backfill deadlocks on this chain
+
+The first design ran the factory stream to completion, then the curve stream. Because
+the indexer is slower than the chain head (R21), the factory backfill never completed
+and the curve stream **never started at all**. The observable symptom was 716 tokens
+indexed and zero trades — a state that looks like a decoding bug but was a scheduling
+bug.
+
+**Fixed.** Both streams now run concurrently, with the curve stream capped at the
+factory checkpoint via `Scanner.maxBlock`. That preserves the real requirement — a
+trade needs its token to exist first — without requiring the factory to ever be
+"done".
+
+The lesson generalises: on a chain that outruns the indexer, any "phase A to
+completion, then phase B" schedule is a deadlock.
+
+---
+
 ## R3 — H — Indexer backfill is infeasible on public RPC
 
 Measured: 0.1013 s/block, ~852,912 blocks/day. V2 factory deployed at block
@@ -326,6 +400,7 @@ manipulation, and moderation states from day one.
 | # | Question | Blocks | Verify by |
 | --- | --- | --- | --- |
 | U8 | Real bundle latency for STUNKS' own path: launch receipt → buy inclusion | whether Protected Launch delivers its advantage | small-value mainnet test launch with a real whitelist |
+| U13 | Whether a co-located indexer sustains >10 blocks/second | whether the indexer can stay current at all (R21) | deploy the indexer in the database's region and re-measure |
 | U10 | Where the collected snipe tax goes (protocol / creator / buyback / reserve) | fee analytics and honest mechanism copy | verified source, or trace a taxed buy's value flow |
 | U12 | Exact composition of deductions once they exceed 100% (age 0 of a launch) | nothing — quotes there come from simulation | verified source, or a controlled fresh launch |
 
@@ -334,6 +409,7 @@ manipulation, and moderation states from day one.
 | # | Was | Resolution |
 | --- | --- | --- |
 | U1 | Exact snipe-tax decay function | `startBps >> floor(elapsed*14/seconds)`, matching independent measurements; and `currentSnipeTaxBps(address)` exists on-chain, so it is read rather than computed |
+| U3 | Envio HyperSync coverage for 4663 | **Supported.** `/height` returns a value tracking the chain head (measured lag ~113 blocks). Queries need a free token from app.envio.dev. Implemented as a pluggable source; `pnpm probe:sources` re-checks it |
 | U9 | Approved pair-token list | `pairTokenEconomics(address)` and `approvedPairTokens(address)` verified present; five pairs re-read and matched exactly. USDG is 6 decimals |
 | U11 | The router's declarable-exemption limit | **31, verified first-hand.** `pnpm probe:exemptions` simulates `launchAndBuy` at 0/1/30/31/32/33 declared addresses: 31 succeeds, 32 reverts. Encoded as `MAX_DECLARABLE_SNIPE_EXEMPTIONS` with tests |
 | — | "Launch and buy cannot be atomic" | **Wrong.** `PonsV2LaunchAndBuy.launchAndBuy` (`0xf85f8e41`) is public and in active use; the creator's own buy is atomic and unfront-runnable |
@@ -355,7 +431,7 @@ exceeding it costs money. It also frees slots taken by the auto-exempt deployer 
 by duplicates, so the user is not pushed over the cap by entries that were never
 needed. Covered by tests.
 | U2 | Uniswap V4 quoter/router availability on 4663 | graduated-token trading (Phase 5) | probe V4 periphery addresses; replay a real swap |
-| U3 | Envio HyperSync coverage for 4663 | indexer backfill (Phase 3) | probe the HyperSync endpoint |
+
 | U4 | Fee escrow event signatures | creator earnings (Phase 7) | verified ABI or topic matching on escrow logs |
 | U5 | `poolFee = 0` semantics with the hook's dynamic fee | price-impact accuracy post-graduation | read a graduated pool's state and compare |
 | U6 | Empirical reorg depth on Robinhood Chain | indexer confirmation depth (Phase 3) | observe head churn over time |

@@ -18,4 +18,48 @@ export function getPrisma(): PrismaClient {
   return globalForPrisma.stunksPrisma;
 }
 
+/**
+ * Wait until the database answers.
+ *
+ * Serverless Postgres (Neon among others) suspends an idle compute and the FIRST
+ * connection after that fails outright rather than blocking while it wakes. For a
+ * long-running worker that is not an edge case — it happens every time the indexer
+ * starts after a quiet period, and crashing on it would make the process unusable
+ * without a supervisor.
+ *
+ * Retries with linear backoff and reports progress, so a slow cold start looks like
+ * a slow cold start rather than a hang.
+ */
+export async function waitForDatabase(
+  prisma: PrismaClient,
+  options: {
+    attempts?: number;
+    delayMs?: number;
+    onAttempt?: (attempt: number, total: number, error: string) => void;
+  } = {},
+): Promise<void> {
+  const attempts = options.attempts ?? 10;
+  const delayMs = options.delayMs ?? 2_000;
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      await prisma.$queryRaw`SELECT 1`;
+      return;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message.split("\n")[0] : String(error);
+      options.onAttempt?.(attempt, attempts, message ?? "unknown error");
+      if (attempt === attempts) {
+        throw new Error(
+          `Database did not become reachable after ${attempts} attempts. ` +
+            `Last error: ${message}`,
+        );
+      }
+      // Linear rather than exponential: a suspended compute wakes in seconds, so
+      // backing off aggressively just wastes startup time.
+      await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+    }
+  }
+}
+
 export type { PrismaClient };

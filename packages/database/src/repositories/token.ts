@@ -59,6 +59,17 @@ export interface LaunchRecordInput {
    * was concentrated, so this is recorded at launch rather than inferred later.
    */
   readonly whitelistSize?: number;
+
+  /**
+   * Opening price and reserve, folded into the same write.
+   *
+   * Kept here rather than in a follow-up `updateStats` call for a measured reason:
+   * launches arrive fast enough on this chain that a second round trip to a remote
+   * serverless Postgres was a material share of the indexer's throughput.
+   */
+  readonly openingPrice?: bigint;
+  readonly openingMarketCap?: bigint;
+  readonly openingRealQuoteReserve?: bigint;
 }
 
 export interface TokenStatsInput {
@@ -145,6 +156,13 @@ export class TokenRepository {
             hadWhitelistBundle: (input.whitelistSize ?? 0) > 0,
             whitelistSize: input.whitelistSize ?? 0,
 
+            // A launch that has not traded still has a price: the curve opens
+            // against a virtual reserve. Written here so the indexer needs one
+            // round trip per launch rather than two.
+            price: toDecimal(input.openingPrice ?? 0n),
+            marketCap: toDecimal(input.openingMarketCap ?? 0n),
+            realQuoteReserve: toDecimal(input.openingRealQuoteReserve ?? 0n),
+
             creatorId: creator.id,
           },
           select: { id: true },
@@ -202,6 +220,10 @@ export class TokenRepository {
     return this.prisma.token.findUnique({
       where: { chainId_address: { chainId, address: address.toLowerCase() } },
     });
+  }
+
+  async findById(tokenId: string) {
+    return this.prisma.token.findUnique({ where: { id: tokenId } });
   }
 
   /** Curve address is the join key for `CurveBuy` / `CurveSell` logs. */

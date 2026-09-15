@@ -42,6 +42,46 @@ importers:
         specifier: 2.1.8
         version: 2.1.8(@types/node@22.10.2)
 
+  apps/indexer:
+    dependencies:
+      '@stunks/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@stunks/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@stunks/pons':
+        specifier: workspace:*
+        version: link:../../packages/pons
+      '@stunks/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+      '@stunks/utils':
+        specifier: workspace:*
+        version: link:../../packages/utils
+      '@stunks/web3':
+        specifier: workspace:*
+        version: link:../../packages/web3
+      viem:
+        specifier: 2.21.55
+        version: 2.21.55(typescript@5.7.2)(zod@3.24.1)
+      zod:
+        specifier: 3.24.1
+        version: 3.24.1
+    devDependencies:
+      '@types/node':
+        specifier: 22.10.2
+        version: 22.10.2
+      tsx:
+        specifier: 4.19.2
+        version: 4.19.2
+      typescript:
+        specifier: 5.7.2
+        version: 5.7.2
+      vitest:
+        specifier: 2.1.8
+        version: 2.1.8(@types/node@22.10.2)
+
   apps/web:
     dependencies:
       '@stunks/config':

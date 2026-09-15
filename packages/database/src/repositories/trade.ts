@@ -115,6 +115,56 @@ export class TradeRepository {
     return result.count;
   }
 
+  /**
+   * Recompute a token's totals from stored rows.
+   *
+   * The indexer recomputes rather than increments, deliberately. An incremented
+   * counter is wrong forever after a single replay or rollback; a recomputed one is
+   * self-healing, and at these row counts the query is cheap given the
+   * `(tokenId, timestamp)` index.
+   */
+  async aggregateForToken(
+    tokenId: string,
+    options: { since?: Date } = {},
+  ): Promise<{
+    volume: bigint;
+    tradeCount: number;
+    buyCount: number;
+    sellCount: number;
+  }> {
+    const where = {
+      tokenId,
+      ...(options.since ? { timestamp: { gte: options.since } } : {}),
+    };
+
+    const [totals, buys, sells] = await Promise.all([
+      this.prisma.trade.aggregate({
+        where,
+        _sum: { quoteAmount: true },
+        _count: { _all: true },
+      }),
+      this.prisma.trade.count({ where: { ...where, side: "BUY" } }),
+      this.prisma.trade.count({ where: { ...where, side: "SELL" } }),
+    ]);
+
+    const sum = totals._sum.quoteAmount;
+    return {
+      // Volume is always measured on the quote leg, so buys and sells are comparable.
+      volume: sum === null ? 0n : BigInt(sum.toFixed()),
+      tradeCount: totals._count._all,
+      buyCount: buys,
+      sellCount: sells,
+    };
+  }
+
+  /** Most recent trade, which defines the token's current price. */
+  async latestForToken(tokenId: string) {
+    return this.prisma.trade.findFirst({
+      where: { tokenId },
+      orderBy: [{ blockNumber: "desc" }, { logIndex: "desc" }],
+    });
+  }
+
   /** Cursor-paginated history. Never offset: trade tables grow without bound. */
   async listForToken(args: { tokenId: string; limit: number; cursor?: string }) {
     return this.prisma.trade.findMany({

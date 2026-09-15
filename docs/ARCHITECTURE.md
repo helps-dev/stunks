@@ -304,3 +304,52 @@ until a real routing mechanism is verified to exist.
 - `PONS_V2_INTEGRATION.md` — verified addresses, ABIs, events, math
 - `IMPLEMENTATION_PLAN.md` — phases and Phase 1 scope
 - `KNOWN_RISKS.md` — risks and open unknowns
+
+---
+
+## 12. Measured indexer behaviour (Phase 3)
+
+Numbers from running the real indexer against mainnet, not estimates.
+
+### `eth_getLogs` capability is not implied by reachability
+
+| Endpoint | Widest window accepted | Usable for log scanning |
+| --- | --- | --- |
+| `robinhood.drpc.org` | 100 blocks (rejected at 250) | yes, slowly |
+| `rpc.ordofi.network` | **none succeeded** | **no** — `eth_call` only |
+
+A healthy endpoint may still be useless for logs. The indexer's endpoint list must
+contain at least one that actually serves `eth_getLogs`.
+
+### Backfill source
+
+| Source | Full 36.8M-block backfill |
+| --- | --- |
+| Free RPC, 100-block windows at ~2 req/s | **~51 hours** |
+| Envio HyperSync | minutes (millions of blocks per query) |
+
+HyperSync is confirmed to support chain 4663 and to track its head. It needs a free
+token. This is why `LogSource` is an interface: the choice is configuration.
+
+### Throughput is the open problem
+
+```text
+chain produces      ~10 blocks/second
+indexer sustained    2–7 blocks/second
+```
+
+The indexer is **correct but not current**: it indexed 716 tokens with every integrity
+check passing, while falling steadily behind.
+
+Fixed during Phase 3:
+
+- Multicall3 batching, collapsing ~20 sequential contract reads per launch into one
+  round trip. Multicall3 is deployed at the canonical address on this chain.
+- A block-timestamp cache, removing one `eth_getBlockByNumber` per log.
+- Folding the opening price write into the launch insert, halving DB round trips.
+- Running both streams concurrently with the curve stream capped at the factory
+  checkpoint. The earlier sequential design deadlocked (see `KNOWN_RISKS.md` R23).
+
+What remains is database latency, and the most promising remedy is deployment rather
+than code: the measurement was taken from a developer machine against Neon in
+`us-east-2`. See `KNOWN_RISKS.md` R21 and U13.
