@@ -635,3 +635,20 @@ exercises the real chain-scoped deletion semantics, but only inside its own name
 blockchain is the source of truth; a partial history presented as complete would be a
 new, worse data error. A replay changes many database rows and consumes RPC/HyperSync
 capacity, so it requires explicit operator approval.
+
+
+### Recovery outcome (development database, 2026-09-16)
+
+Neon point-in-time restore to `2026-09-15T21:30:00Z` (04:30 Asia/Pontianak) was
+verified before restoring with a historical query: **37,088** `trades` rows for chain
+4663. After restore, read-only integrity checks found zero orphaned trades.
+
+The historical snapshot had 1,217 trades whose block number was ahead of the curve
+checkpoint — a normal snapshot race, where idempotent rows were written just before the
+checkpoint transaction. The current indexer replayed that overlap safely, then advanced
+past it: the active database reached **42,910** trades and zero trades above the curve
+checkpoint. No trade was duplicated.
+
+Seven old failed-block rows were all below checkpoints that had already advanced. The
+scanner now resolves failed rows through every successful checkpoint, so the health
+endpoint returned `ok` with zero unresolved failures after the replay.

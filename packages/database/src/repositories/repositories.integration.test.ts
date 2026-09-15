@@ -440,6 +440,30 @@ describeDb("failed block tracking", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("resolves only failures at or below a checkpoint that advanced successfully", async () => {
+    await repos.checkpoints.recordFailedBlock({
+      chainId: CHAIN_ID,
+      stream: STREAM,
+      blockNumber: 50n,
+      error: "old transient outage",
+    });
+    await repos.checkpoints.recordFailedBlock({
+      chainId: CHAIN_ID,
+      stream: STREAM,
+      blockNumber: 51n,
+      error: "future failure",
+    });
+
+    await expect(repos.checkpoints.resolveFailedBlocksThrough(CHAIN_ID, STREAM, 50n)).resolves.toBe(
+      1,
+    );
+
+    const failures = await repos.checkpoints.listUnresolvedFailures(CHAIN_ID);
+    expect(failures.filter((failure) => failure.stream === STREAM).map((failure) => failure.blockNumber)).toEqual([
+      51n,
+    ]);
+  });
+
   it("surfaces unresolved failures in the health snapshot", async () => {
     await repos.checkpoints.getOrCreate(CHAIN_ID, STREAM, 1n);
     await repos.checkpoints.recordFailedBlock({

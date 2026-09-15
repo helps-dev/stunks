@@ -212,6 +212,31 @@ export class CheckpointRepository {
     });
   }
 
+  /**
+   * Resolve every historical failed-block record at or below a checkpoint that has
+   * since advanced successfully.
+   *
+   * A checkpoint only moves after processing a complete range, so any failure at or
+   * below it has been retried and is no longer an active problem. This repairs health
+   * after an outage/restart without hiding a failure ahead of the checkpoint.
+   */
+  async resolveFailedBlocksThrough(
+    chainId: number,
+    stream: string,
+    throughBlock: bigint,
+  ): Promise<number> {
+    const result = await this.prisma.failedBlock.updateMany({
+      where: {
+        chainId,
+        stream,
+        blockNumber: { lte: throughBlock },
+        resolved: false,
+      },
+      data: { resolved: true },
+    });
+    return result.count;
+  }
+
   async listUnresolvedFailures(chainId: number, limit = 100) {
     return this.prisma.failedBlock.findMany({
       where: { chainId, resolved: false },

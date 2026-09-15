@@ -254,13 +254,13 @@ export class Scanner {
         toBlock: reached,
         blockHash: reachedHash,
       });
-      // A successful replay clears an earlier failed-block record for its first
-      // block. `resolveFailedBlock` is deliberately idempotent, so the normal path
-      // does not need to know whether a failure existed.
-      await options.repos.checkpoints.resolveFailedBlock(
+      // A successful range proves all older failed-block records in this stream were
+      // retried. Clear them through the new checkpoint so historical transient RPC or
+      // database outages cannot keep health degraded forever.
+      await options.repos.checkpoints.resolveFailedBlocksThrough(
         options.chainId,
         options.stream,
-        fromBlock,
+        reached,
       );
     } catch (error) {
       if (isDatabaseAvailabilityError(error)) {

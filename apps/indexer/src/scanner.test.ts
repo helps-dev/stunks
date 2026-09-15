@@ -37,6 +37,7 @@ interface Fixture {
     recordError: ReturnType<typeof vi.fn>;
     recordFailedBlock: ReturnType<typeof vi.fn>;
     resolveFailedBlock: ReturnType<typeof vi.fn>;
+    resolveFailedBlocksThrough: ReturnType<typeof vi.fn>;
     advance: ReturnType<typeof vi.fn>;
   };
 }
@@ -57,6 +58,7 @@ function fixture(options: { topics0?: readonly Hex[] } = {}): Fixture {
     recordError: vi.fn().mockResolvedValue(undefined),
     recordFailedBlock: vi.fn().mockResolvedValue(undefined),
     resolveFailedBlock: vi.fn().mockResolvedValue(undefined),
+    resolveFailedBlocksThrough: vi.fn().mockResolvedValue(0),
     advance: vi.fn().mockResolvedValue(undefined),
   };
 
@@ -211,9 +213,13 @@ describe("Scanner source errors", () => {
     expect(test.checkpoints.recordFailedBlock).not.toHaveBeenCalled();
   });
 
-  it("resolves a previous failed block after the same range succeeds", async () => {
+  it("resolves every old failed block through a successful checkpoint", async () => {
     const test = fixture();
     await test.scanner.tick();
-    expect(test.checkpoints.resolveFailedBlock).toHaveBeenCalledWith(4663, "factory", 101n);
+    expect(test.checkpoints.resolveFailedBlocksThrough).toHaveBeenCalledWith(
+      4663,
+      "factory",
+      103n,
+    );
   });
 });
