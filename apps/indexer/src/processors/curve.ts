@@ -62,12 +62,23 @@ export async function processCurveLogs(
   // many trades in the same block.
   await deps.blockTimes.warm(logs.map((entry) => entry.blockNumber));
 
-  // Resolving the same curve repeatedly inside one batch is wasteful: a busy launch
-  // can emit dozens of trades in a single window.
-  const tokenByCurve = new Map<
-    string,
-    { id: string; totalSupply: bigint; address: string } | null
-  >();
+  // Resolve every curve in the window to its token in ONE query.
+  //
+  // This used to be one `findByCurve` per newly-seen curve. A window spanning hundreds
+  // of active launches paid hundreds of sequential round trips before doing any work,
+  // and it stalled the stream outright: one 126-block tick in six minutes while the
+  // factory stream ran at ~100 blocks/second.
+  const curveAddresses = logs.map((entry) => entry.address.toLowerCase());
+  const tokenByCurve = await deps.repos.tokenBatch.findManyByCurves(
+    deps.chainId,
+    curveAddresses,
+  );
+
+  // Trades are collected and inserted together rather than one at a time. `recordMany`
+  // uses createMany with skipDuplicates, so the unique constraint on
+  // (chainId, transactionHash, logIndex) still makes a replay a no-op.
+  const pendingTrades: Parameters<typeof deps.repos.trades.record>[0][] = [];
+  const phaseSyncs: { tokenId: string; tokenAddress: string }[] = [];
 
   for (const raw of logs) {
     const decoded = decodePonsLog({
@@ -91,10 +102,11 @@ export async function processCurveLogs(
      * strand users if the app does not know about it.
      */
     if (decoded.name === "AutoGraduationFailed" || decoded.name === "CurveCompleted") {
-      const token = await deps.repos.tokens.findByCurve(deps.chainId, raw.address);
+      const token = tokenByCurve.get(raw.address.toLowerCase());
       if (token) {
-        // The event says something changed; the chain says what it changed to.
-        await syncPhaseFromChain(token.id, token.address, deps);
+        // The event says something changed; the chain says what it changed to. Deferred
+        // to the end of the batch so it is not a sequential await inside the log loop.
+        phaseSyncs.push({ tokenId: token.id, tokenAddress: token.address });
         if (decoded.name === "AutoGraduationFailed") {
           deps.log("auto-graduation FAILED — token may be stuck awaiting its pool", {
             token: token.address,
@@ -109,20 +121,6 @@ export async function processCurveLogs(
     if (decoded.name !== "CurveBuy" && decoded.name !== "CurveSell") continue;
 
     const curveKey = raw.address.toLowerCase();
-    if (!tokenByCurve.has(curveKey)) {
-      const token = await deps.repos.tokens.findByCurve(deps.chainId, curveKey);
-      tokenByCurve.set(
-        curveKey,
-        token
-          ? {
-              id: token.id,
-              totalSupply: BigInt(token.totalSupply.toFixed()),
-              address: token.address,
-            }
-          : null,
-      );
-    }
-
     const token = tokenByCurve.get(curveKey);
     if (!token) {
       // The launch has not been indexed yet — the factory stream may be behind, or
@@ -155,7 +153,7 @@ export async function processCurveLogs(
 
     const timestamp = await deps.blockTimes.get(raw.blockNumber);
 
-    const result = await deps.repos.trades.record({
+    pendingTrades.push({
       chainId: deps.chainId,
       transactionHash: raw.transactionHash,
       logIndex: raw.logIndex,
@@ -182,31 +180,129 @@ export async function processCurveLogs(
       excludedFromCompetition: exclusion.excluded,
       ...(exclusion.reason !== undefined ? { exclusionReason: exclusion.reason } : {}),
     });
+    touched.add(token.id);
+  }
 
-    if (result.created) {
-      trades++;
-      touched.add(token.id);
-    } else {
-      duplicates++;
-    }
+  // ── One insert for the whole window ──
+  if (pendingTrades.length > 0) {
+    const inserted = await deps.repos.trades.recordMany(pendingTrades);
+    trades = inserted.inserted;
+    // Everything not inserted was already present. Counted rather than ignored, so a
+    // persistent overlap is visible in the logs.
+    duplicates = pendingTrades.length - inserted.inserted;
   }
 
   // Aggregates are recomputed from what is now stored, rather than incremented from
   // this batch. That way a replay cannot inflate them, and a rollback cannot leave
   // them stale.
-  for (const tokenId of touched) {
-    await refreshTokenStats(tokenId, deps);
+  await refreshTokenStatsBatch([...touched], deps);
+
+  for (const entry of phaseSyncs) {
+    await syncPhaseFromChain(entry.tokenId, entry.tokenAddress, deps);
   }
 
   return { trades, duplicates, unmatched, tokensTouched: touched.size };
 }
 
 /**
- * Recompute a token's derived stats from stored trades plus a live curve read.
+ * Recompute derived stats for many tokens at once.
  *
- * The reserves and graduation progress come from the chain, not from summing trades:
- * fees pending sweep are excluded from the curve's own reserve accounting, so a
+ * The per-token version cost about six sequential round trips each — find the token,
+ * three aggregates, a chain read, an update. At 100 tokens per window that was ~600
+ * sequential round trips and the stream stalled.
+ *
+ * This does a fixed number of database queries regardless of token count, reads every
+ * curve concurrently (Multicall3 collapses those), and then writes. The reserves and
+ * graduation progress still come from the chain rather than from summing trades: fees
+ * pending sweep are excluded from the curve's own reserve accounting, so a
  * reconstruction from trade history would drift.
+ */
+export async function refreshTokenStatsBatch(
+  tokenIds: readonly string[],
+  deps: CurveProcessorDeps,
+): Promise<void> {
+  if (tokenIds.length === 0) return;
+
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+  const [tokens, totals, daily, latest] = await Promise.all([
+    deps.repos.tokenBatch.curveAddressesFor(tokenIds),
+    deps.repos.tradeBatch.aggregateForTokens(tokenIds),
+    deps.repos.tradeBatch.aggregateForTokens(tokenIds, { since }),
+    deps.repos.tradeBatch.latestForTokens(tokenIds),
+  ]);
+
+  // Curve reads run concurrently. The indexer client has Multicall3 enabled, so these
+  // collapse into batched calls rather than one request each.
+  const states = await Promise.all(
+    tokenIds.map(async (tokenId) => {
+      const token = tokens.get(tokenId);
+      if (!token) return { tokenId, state: null };
+      try {
+        return {
+          tokenId,
+          state: await readCurveState(deps.client, token.curveAddress as Address),
+        };
+      } catch {
+        // A graduated curve can stop answering some reads. Keeping the last known
+        // values is honest; fabricating a reserve would not be.
+        return { tokenId, state: null };
+      }
+    }),
+  );
+  const stateByToken = new Map(states.map((entry) => [entry.tokenId, entry.state]));
+
+  await Promise.all(
+    tokenIds.map(async (tokenId) => {
+      const token = tokens.get(tokenId);
+      if (!token) return;
+
+      const aggregate = totals.get(tokenId) ?? {
+        volume: 0n,
+        tradeCount: 0,
+        buyCount: 0,
+        sellCount: 0,
+      };
+      const dayAggregate = daily.get(tokenId) ?? {
+        volume: 0n,
+        tradeCount: 0,
+        buyCount: 0,
+        sellCount: 0,
+      };
+      const lastTrade = latest.get(tokenId);
+      const state = stateByToken.get(tokenId) ?? null;
+
+      let realQuoteReserve = 0n;
+      let graduationBps = 0;
+      if (state) {
+        realQuoteReserve = state.realQuoteReserve;
+        // eslint-disable-next-line no-restricted-syntax -- basis points 0..10000 stored in an int column, not a money value
+        graduationBps = Number(ratioBps(state.realQuoteReserve, state.graduationThreshold));
+        if (graduationBps > 10_000) graduationBps = 10_000;
+      }
+
+      const price = lastTrade ? lastTrade.price : 0n;
+
+      await deps.repos.tokens.updateStats(tokenId, {
+        realQuoteReserve,
+        graduationBps,
+        price,
+        marketCap: marketCapFromPrice(price, token.totalSupply),
+        volume24h: dayAggregate.volume,
+        volumeTotal: aggregate.volume,
+        holderCount: token.holderCount,
+        tradeCount: aggregate.tradeCount,
+        buyCount: aggregate.buyCount,
+        sellCount: aggregate.sellCount,
+        ...(lastTrade ? { lastTradeAt: lastTrade.timestamp } : {}),
+      });
+    }),
+  );
+}
+
+/**
+ * Single-token stats refresh. Retained because the graduation stream and the recovery
+ * paths refresh one token at a time, where batching would add nothing.
  */
 export async function refreshTokenStats(
   tokenId: string,

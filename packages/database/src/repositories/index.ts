@@ -4,12 +4,14 @@ import { TokenRepository } from "./token.js";
 import { TradeRepository } from "./trade.js";
 import { ExploreRepository } from "./explore.js";
 import { LaunchBatchRepository } from "./launch-batch.js";
+import { TokenBatchRepository, TradeBatchRepository } from "./trade-batch.js";
 
 export * from "./checkpoint.js";
 export * from "./token.js";
 export * from "./trade.js";
 export * from "./explore.js";
 export * from "./launch-batch.js";
+export * from "./trade-batch.js";
 
 /**
  * Repository bundle.
@@ -25,6 +27,8 @@ export interface Repositories {
   readonly trades: TradeRepository;
   readonly explore: ExploreRepository;
   readonly launchBatch: LaunchBatchRepository;
+  readonly tradeBatch: TradeBatchRepository;
+  readonly tokenBatch: TokenBatchRepository;
 }
 
 export function createRepositories(prisma: PrismaClient): Repositories {
@@ -34,5 +38,7 @@ export function createRepositories(prisma: PrismaClient): Repositories {
     trades: new TradeRepository(prisma),
     explore: new ExploreRepository(prisma),
     launchBatch: new LaunchBatchRepository(prisma),
+    tradeBatch: new TradeBatchRepository(prisma),
+    tokenBatch: new TokenBatchRepository(prisma),
   };
 }

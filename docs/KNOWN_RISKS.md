@@ -193,9 +193,45 @@ transaction per launch. It is recomputed from the token table by
 `refreshCreatorCounts`, which is self-healing after a replay rather than permanently
 inflated by one.
 
-**Still true:** verify throughput in the actual deployment environment before calling
-the indexer production-ready. The number above was measured on a developer machine, and
-a different environment is a different measurement.
+### The curve stream had the same bug, and it was worse
+
+Fixing the factory stream exposed that the curve stream was not merely slow, it was
+**stalled**: one 126-block tick in six minutes (~0.35 blocks/second) while the factory
+stream ran at ~100. The cause was the same shape of mistake in three places:
+
+1. one `findByCurve` per newly-seen curve address in the window
+2. one `trades.record()` per trade — a findUnique plus a create, so two round trips each
+   — while a `recordMany` already existed and went unused
+3. `refreshTokenStats` awaited sequentially per touched token, each costing ~6 round
+   trips (find token, three aggregates, a chain read, an update)
+
+At ~100 tokens touched per window that was ~600 sequential round trips before the window
+could close.
+
+Fixed with `TradeBatchRepository` and `TokenBatchRepository`: one query resolves every
+curve to its token, one `createMany` inserts every trade, and stats are recomputed for
+the whole set with a fixed number of queries (two `groupBy` calls plus one `DISTINCT ON`
+for the per-token latest trade) with the curve reads issued concurrently.
+
+Re-measured: **0.35 -> 15-26 blocks/second**, inserting ~900 trades per tick. Trade count
+went from 552 to **7,861**.
+
+The curve stream is slower than the factory stream because it processes far more logs per
+window (~1,268 vs ~150). It is still above the chain's ~10 blocks/second, so it converges,
+but a large backlog takes hours rather than minutes to clear.
+
+**Lesson worth keeping:** I fixed one stream, measured it, declared the risk resolved, and
+was wrong — the other stream had the identical defect and I had not looked. Measuring the
+component you just changed is not the same as measuring the system.
+
+### Current state
+
+- factory stream: at the head, ~52 blocks (5 s) lag, checkpoint clean
+- curve stream: ~15-26 blocks/second with a ~147k block backlog still to clear
+
+**Still true:** verify throughput in the actual deployment environment before calling the
+indexer production-ready. The numbers above were measured on a developer machine, and a
+different environment is a different measurement.
 
 ---
 
