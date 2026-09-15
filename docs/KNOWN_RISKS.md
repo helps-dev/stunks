@@ -132,17 +132,40 @@ product works without it.
 
 ---
 
-## R21 — C — Indexer throughput is below the chain's block rate
+## R21 — RESOLVED — Indexer throughput was below the chain's block rate
 
-Measured by running the real indexer against mainnet, not estimated:
+**Resolved.** Re-measured after batching the launch writes:
 
 ```text
 chain produces          ~10 blocks/second
-indexer sustained        2–7 blocks/second
+indexer before           2–7 blocks/second   (could never catch up)
+indexer after           ~100 blocks/second   (median of 6 consecutive windows)
 ```
 
-So the indexer currently falls further behind over time. It indexed 716 tokens and
-392 creators correctly, with all integrity checks passing, but it cannot keep pace.
+Sustained ~100 blocks/second is 10x the chain's production rate, so the indexer both
+catches up and stays current. Evidence: token count went from 716 to **5,163** and
+trade count from **0 to 552** in roughly six minutes of wall-clock running, with all
+integrity checks still passing.
+
+The original measurement and the diagnosis that followed it are kept below, because
+one of the conclusions was wrong and that is worth recording.
+
+### What the original diagnosis got wrong
+
+The remaining bottleneck was attributed primarily to **network latency to a remote
+serverless Postgres**, with co-location named as the main remedy and batching listed
+second. That ordering was wrong.
+
+The cost was not latency per round trip, it was the **number of round trips**: a
+transaction per launch, at roughly 13 launches per 226 blocks. Batching a whole scan
+window into three round trips removed ~97% of them and fixed the problem outright from
+a developer machine on another continent, with the database still in `us-east-2`.
+
+Co-location is still worth doing and the deploy config exists for it
+(`apps/indexer/Dockerfile`, `apps/indexer/fly.toml`), but it is now an optimisation
+rather than a prerequisite. **U13 is closed:** the question of whether a co-located
+indexer could sustain >10 blocks/second is moot, because a non-co-located one sustains
+~100.
 
 Two bottlenecks were found and partly fixed:
 
@@ -157,22 +180,26 @@ What remains is dominated by **database latency to a remote serverless Postgres*
 (~2.7s per launch observed at peak). Launches arrive at roughly 13 per 226 blocks on
 this chain, which is an extraordinary rate.
 
-**Remaining remedies, in order of expected effect:**
+### The fix
 
-- **Co-locate the database with the indexer.** Neon is in `us-east-2`; the measurement
-  was taken from a developer machine on another continent. Removing ~300 ms per round
-  trip is plausibly a 10–50x improvement and costs nothing but a deployment choice.
-- **Batch the launch writes.** Collect a window's launches and insert them with one
-  `createMany` plus one batched creator upsert, instead of a transaction per launch.
-- **Use HyperSync for backfill** (already implemented and pluggable).
+`LaunchBatchRepository.recordLaunches` in `@stunks/database` collapses one scan window
+into three round trips regardless of how many launches it contains: read which creators
+exist, `createMany` the missing ones, `createMany` the tokens. `skipDuplicates` keeps it
+idempotent, which matters more than the speed — an overlapping window or a replayed
+batch must not double-write.
 
-**Do not treat the indexer as production-ready until it demonstrably sustains more
-than 10 blocks/second in its deployment environment.** Until then it is correct but
-not able to stay current.
+**Trade-off accepted:** creator `tokenCount` is no longer incremented inside a
+transaction per launch. It is recomputed from the token table by
+`refreshCreatorCounts`, which is self-healing after a replay rather than permanently
+inflated by one.
+
+**Still true:** verify throughput in the actual deployment environment before calling
+the indexer production-ready. The number above was measured on a developer machine, and
+a different environment is a different measurement.
 
 ---
 
-## R22 — H — The curve stream scans from the factory deploy block
+## R22 — RESOLVED — The curve stream scanned from the factory deploy block
 
 The curve stream starts at the same block as the factory stream and scans forward
 looking for `CurveBuy` / `CurveSell` from the curves it knows about. Since curves only
@@ -182,9 +209,25 @@ is guaranteed to contain nothing for it.
 Observed: the curve stream scanning from block 26,842,730 at ~233 blocks/second with
 zero matching logs, which would take ~44 hours to reach the head.
 
-**Mitigation, not yet implemented:** start the curve stream at the minimum
-`launchBlock` of the tokens it tracks, and ideally track a per-curve start block so a
-newly discovered curve does not force a rescan of history that cannot concern it.
+**Resolved.** `CheckpointRepository.fastForward` moves the curve checkpoint to
+`earliestLaunchBlock - 1` at startup. It is deliberately a separate method from
+`advance()`: advancing means "these blocks were processed", fast-forwarding means
+"these blocks were skipped, and here is why". They record different facts, and the
+block hash is left null for a skip because none was verified.
+
+**Bug found and fixed while verifying this.** The fast-forward was originally called
+from inside the curve scanner's `maxBlock` callback, so it ran on every tick. Once the
+curve stream overtook `earliestLaunchBlock`, the callback asked `advance` to move the
+checkpoint backwards and the guard rejected it every tick:
+
+```text
+Refusing to move checkpoint backwards for curves: at 63775020, asked to set 26855360
+```
+
+Non-fatal, because the error was caught per tick, but it wasted a tick each time. The
+call now happens once at startup, before scanning begins. The lesson worth keeping: a
+guard firing repeatedly is a signal that a caller has the wrong lifecycle, not that the
+guard needs relaxing.
 
 ---
 
@@ -400,7 +443,7 @@ manipulation, and moderation states from day one.
 | # | Question | Blocks | Verify by |
 | --- | --- | --- | --- |
 | U8 | Real bundle latency for STUNKS' own path: launch receipt → buy inclusion | whether Protected Launch delivers its advantage | small-value mainnet test launch with a real whitelist |
-| U13 | Whether a co-located indexer sustains >10 blocks/second | whether the indexer can stay current at all (R21) | deploy the indexer in the database's region and re-measure |
+| ~~U13~~ | ~~Whether a co-located indexer sustains >10 blocks/second~~ | CLOSED — moot. Batched writes reached ~100 blocks/second *without* co-location (R21). | — |
 | U10 | Where the collected snipe tax goes (protocol / creator / buyback / reserve) | fee analytics and honest mechanism copy | verified source, or trace a taxed buy's value flow |
 | U12 | Exact composition of deductions once they exceed 100% (age 0 of a launch) | nothing — quotes there come from simulation | verified source, or a controlled fresh launch |
 
@@ -438,3 +481,87 @@ needed. Covered by tests.
 | U7 | Does deployed factory bytecode match published source overall? | trust in all source-derived behaviour | fetch verified source from an unfiltered network |
 
 No implementation will assume a value for any of these.
+
+---
+
+## R24 — H — A bundle buy is not atomic, and cannot be made atomic
+
+The whitelist bundle sends one `curve.buy(amount, minOut, recipient)` per whitelisted
+wallet, sequentially, from a single funded payer. Sequential submission from one wallet
+gives sequential nonces, so ordering holds *within* that wallet — but the bundle is not
+atomic with the launch and not atomic with itself. An outsider's transaction can
+interleave, and any individual buy can revert while its neighbours succeed.
+
+**What this rules out:** the honest description of this feature is never "all your
+wallets buy at the launch price". It is "your wallets buy without the anti-snipe tax,
+in order, as fast as one wallet can submit".
+
+**Mitigations implemented:**
+
+- **Permutation-safe floors.** Every buy's `minOut` is priced as if every *other* buy
+  in the bundle landed first (`worstCaseFloors` in `packages/pons/src/trade/bundle.ts`).
+  A floor priced on the planning-time reserve would make the first buy move the price
+  and every later buy revert on its own slippage check — a bundle that half-executes and
+  looks like a bug. Proven by a test that replays the plan in reverse order and asserts
+  every floor still clears.
+- **Per-wallet result reporting.** The UI reports each wallet's outcome separately, with
+  `unknown` as a distinct state from `failed`. A transaction whose receipt could not be
+  retrieved is never described as failed; the wallet may still have it.
+- **Honest cap warning.** Above ~8 wallets the later buys will land after the ~3 s
+  window. They still pay no tax (they are exempt) but they buy at a price other traders
+  have already moved. The form says this before the user commits.
+
+**Not mitigated:** if the payer wallet is front-run between the launch and the first
+bundle buy, the bundle buys at a worse price. Nothing in the protocol prevents this.
+
+**Unresolved (U8):** actual latency from launch receipt to first bundle buy landing has
+never been measured on mainnet. It requires a real launch with real ETH. Until then, how
+many wallets genuinely fit inside the window is an estimate, and the warning threshold of
+8 is a conservative guess rather than a measurement.
+
+---
+
+## R25 — C — A buy sent to a not-yet-deployed curve silently destroys the funds
+
+Verified behaviour, and the single most dangerous property found in this protocol: a
+`buy` call carrying value to an address with **no code does not revert**. It succeeds as
+a plain value transfer to a codeless account. The ETH is not recoverable.
+
+This matters specifically because the curve address is deterministic and *could* be
+predicted before launching. Predicting it would shave a round trip off the bundle path,
+which is tempting when the whole feature is a race against a 3-second window.
+
+**Mitigation — structural, not procedural.** `buildBundleTransactions` cannot be called
+without a `ConfirmedLaunch`, and the only sanctioned way to obtain one is
+`confirmedLaunchFromReceipt`, which requires a mined receipt containing a `TokenLaunched`
+log emitted **by the configured factory**. The caller must additionally confirm the curve
+holds code, and `buildBundleTransactions` throws if `curveHasCode` is false.
+
+Three layers, deliberately:
+
+1. no curve address exists in the plan until a receipt supplies one
+2. the log must come from the configured factory, so a look-alike event from an
+   attacker's contract cannot redirect the bundle
+3. code presence is checked against the chain, because a receipt proves a transaction
+   mined, not that it mined on the canonical chain after a reorg
+
+Covered by tests, including the refusal path.
+
+---
+
+## R26 — M — STUNKS refuses to trade graduated tokens
+
+Once a launch reaches `PoolCreated`, trading moves to a Uniswap V4 pool governed by the
+Pons meme hook. STUNKS refuses these trades outright rather than routing them.
+
+**Why refuse rather than approximate:** the hook takes a cut in `beforeSwap`/`afterSwap`,
+and the V4 quoting path on this chain is unverified (U2). A constant-product estimate
+would misprice the trade, and a wrong number about someone's money is worse than no
+number.
+
+**User impact:** a graduated token shows an explanation and a pointer to a V4 interface,
+not a trading panel. This is a real product gap, stated plainly rather than hidden behind
+an estimate.
+
+**Resolution path:** close U2 by probing V4 periphery addresses on 4663 and replaying a
+real swap against a graduated pool. Until then the refusal stands.

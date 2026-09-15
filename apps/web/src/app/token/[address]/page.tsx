@@ -24,6 +24,7 @@ import {
 } from "@stunks/utils";
 import { getChainContracts } from "@stunks/config";
 import { tokenDetail, tokenHolders, tokenTrades } from "@/lib/queries";
+import { TradePanel } from "./trade-panel";
 
 /**
  * Token page.
@@ -272,17 +273,24 @@ export default async function TokenPage({ params }: PageProps) {
           <p className="mono hint">{liveError}</p>
         </div>
       ) : live && live.venueKind === "CURVE" ? (
-        <div className="panel pad">
+        <>
           <p className="hint" style={{ marginTop: 0 }}>
             Tradeable on its Pons bonding curve. Total fee per trade:{" "}
             <span className="mono">{formatBps(live.feeBps + live.creatorTaxBps)}</span> (
             {formatBps(live.feeBps)} curve + {formatBps(live.creatorTaxBps)} creator).
+            STUNKS adds nothing on top.
           </p>
-          <p className="hint" style={{ marginBottom: 0 }}>
-            Buy and sell arrive in Phase 5. This page currently confirms the venue and
-            shows history rather than offering a trade it cannot yet execute correctly.
-          </p>
-        </div>
+          <TradePanel
+            token={token.address as Address}
+            factory={getChainContracts(ROBINHOOD_CHAIN_ID).ponsV2Factory}
+            symbol={withDollar(token.symbol)}
+            tokenDecimals={token.decimals}
+            quoteDecimals={quoteDecimals}
+            quoteSymbol={quoteSymbol}
+            quoteIsNative={isNative}
+            quoteTokenAddress={token.pairTokenAddress as Address}
+          />
+        </>
       ) : live && live.venueKind === "UNISWAP_V4" ? (
         <div className="panel pad">
           <p className="hint" style={{ margin: 0 }}>

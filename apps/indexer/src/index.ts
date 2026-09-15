@@ -157,26 +157,16 @@ async function main(): Promise<void> {
       // query would pull every log on the chain.
       requireAddresses: true,
       // Never scan past the factory: a trade needs its token to be indexed first.
+      // Nothing else happens here — an earlier version also fast-forwarded the curve
+      // checkpoint from inside this callback, which ran on every tick and could ask
+      // `advance` to move backwards once the curve stream had overtaken the value.
+      // Skipping empty history is a startup concern, handled once below.
       maxBlock: async () => {
         const state = await repos.checkpoints.getOrCreate(
           config.CHAIN_ID,
           STREAMS.factory,
           config.startBlock,
         );
-
-        // Skip the range before any curve existed. A curve cannot emit a trade
-        // before it is deployed, so scanning those blocks is provably pointless —
-        // and it was measured at ~44 hours of empty scanning.
-        const earliest = await repos.tokens.earliestLaunchBlock(config.CHAIN_ID);
-        if (earliest !== null) {
-          await repos.checkpoints.fastForward({
-            chainId: config.CHAIN_ID,
-            stream: STREAMS.curves,
-            toBlock: earliest - 1n,
-            reason: "no curve existed before the earliest indexed launch",
-          });
-        }
-
         return state.lastProcessedBlock;
       },
       log,
@@ -201,6 +191,28 @@ async function main(): Promise<void> {
     });
 
   const scanners = [makeFactoryScanner(backfillSource), makeCurveScanner(backfillSource)];
+
+  // Skip the stretch of history before any curve existed. A curve cannot emit a trade
+  // before it is deployed, so those blocks are provably empty for this stream — and
+  // scanning them was measured at ~44 hours of finding nothing. Done once, at startup,
+  // and it only ever moves the checkpoint forward.
+  {
+    await repos.checkpoints.getOrCreate(config.CHAIN_ID, STREAMS.curves, config.startBlock);
+    const earliest = await repos.tokens.earliestLaunchBlock(config.CHAIN_ID);
+    if (earliest !== null && earliest > 0n) {
+      const moved = await repos.checkpoints.fastForward({
+        chainId: config.CHAIN_ID,
+        stream: STREAMS.curves,
+        toBlock: earliest - 1n,
+        reason: "no curve existed before the earliest indexed launch",
+      });
+      if (moved && moved.lastProcessedBlock === earliest - 1n) {
+        log("curve stream fast-forwarded past empty history", {
+          toBlock: (earliest - 1n).toString(),
+        });
+      }
+    }
+  }
 
   const shutdown = () => {
     log("shutting down");

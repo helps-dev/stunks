@@ -7,8 +7,13 @@ import {
   EXEMPTION_DISCLOSURES,
   MAX_DECLARABLE_SNIPE_EXEMPTIONS,
   NATIVE_PAIR_TOKEN,
+  buildBundleTransactions,
   buildLaunchTransaction,
+  bundleGasCeiling,
   classifyTxError,
+  confirmedLaunchFromReceipt,
+  planBundle,
+  readCurveState,
   snipeTaxSchedule,
   validateSnipeExemptions,
   type TxState,
@@ -54,6 +59,16 @@ export function LaunchForm(props: LaunchFormProps) {
   const [whitelistText, setWhitelistText] = useState("");
   const [tx, setTx] = useState<TxState>({ phase: "Idle" });
 
+  // Bundle buy: opt-in, because it spends real money immediately after the launch.
+  const [bundleEnabled, setBundleEnabled] = useState(false);
+  const [bundlePerWalletEth, setBundlePerWalletEth] = useState("0.01");
+  const [bundle, setBundle] = useState<BundleUiState>({
+    running: false,
+    results: [],
+    error: null,
+    note: null,
+  });
+
   const whitelistEntries = useMemo(
     () =>
       whitelistText
@@ -79,7 +94,201 @@ export function LaunchForm(props: LaunchFormProps) {
   );
 
   const busy =
-    tx.phase === "Quoting" || tx.phase === "AwaitingWallet" || tx.phase === "Pending";
+    tx.phase === "Quoting" ||
+    tx.phase === "AwaitingWallet" ||
+    tx.phase === "Pending" ||
+    bundle.running;
+
+  /**
+   * Execute the whitelist bundle.
+   *
+   * Runs only after a launch receipt exists. The curve address comes from the receipt's
+   * `TokenLaunched` log and is then confirmed to hold code, because a buy sent to a
+   * codeless address does not revert — it succeeds as a value transfer and the ETH is
+   * gone. Predicting the address to save a round trip would trade a few hundred
+   * milliseconds for the risk of an unrecoverable loss.
+   */
+  async function runBundle(
+    receipt: { logs: readonly unknown[] },
+    launchHash: `0x${string}`,
+  ): Promise<void> {
+    if (!publicClient || !walletClient || !address) return;
+
+    setBundle({ running: true, results: [], error: null, note: "Locating the curve…" });
+
+    try {
+      const logs = receipt.logs as {
+        address: Address;
+        topics: readonly `0x${string}`[];
+        data: `0x${string}`;
+      }[];
+
+      // Confirm code before trusting the address for value-bearing calls.
+      const provisional = confirmedLaunchFromReceipt({
+        logs,
+        transactionHash: launchHash,
+        factory: props.factory,
+        curveHasCode: false,
+      });
+
+      if (!provisional) {
+        setBundle({
+          running: false,
+          results: [],
+          error:
+            "The launch succeeded but its curve address could not be read from the receipt, " +
+            "so no bundle buys were sent. Nothing was spent beyond the launch itself. You " +
+            "can buy from the token page.",
+          note: null,
+        });
+        return;
+      }
+
+      const code = await publicClient.getCode({ address: provisional.curve });
+      const hasCode = code !== undefined && code !== "0x";
+      if (!hasCode) {
+        setBundle({
+          running: false,
+          results: [],
+          error:
+            "The curve contract is not visible on-chain yet, so no bundle buys were sent. " +
+            "This is the safe outcome: a buy to an address with no code would not revert " +
+            "and the funds would be lost.",
+          note: null,
+        });
+        return;
+      }
+
+      const launch = { ...provisional, curveHasCode: true };
+
+      // Real curve state, read now rather than assumed from config.
+      const state = await readCurveState(publicClient, launch.curve);
+
+      const perWallet = parseUnitsExact(bundlePerWalletEth || "0", 18);
+      const planned = planBundle({
+        recipients: whitelistEntries.map((entry) => ({
+          address: entry as Address,
+          amountIn: perWallet,
+        })),
+        pricingQuoteReserve: state.pricingQuoteReserve,
+        tokenReserve: state.tokenReserve,
+        reservedTokens: state.reservedTokens,
+        feeBps: state.feeBps,
+        creatorTaxBps: state.creatorTaxBps,
+        slippageBps: 300,
+        // The launch's own list, so a mismatch is impossible by construction.
+        exemptAddresses: whitelistEntries as Address[],
+      });
+
+      if (!planned.ok) {
+        setBundle({ running: false, results: [], error: planned.message, note: null });
+        return;
+      }
+
+      const executable = buildBundleTransactions(planned.plan, launch);
+
+      // Bid high. The window is a few seconds; an underpriced buy that lands after it
+      // is just a normal buy at a worse price.
+      const block = await publicClient.getBlock();
+      const fees = bundleGasCeiling(
+        block.baseFeePerGas ?? 1_000_000_000n,
+        1_000_000_000n,
+      );
+
+      setBundle({
+        running: true,
+        results: [],
+        error: null,
+        note: `Sending ${executable.transactions.length} buys…`,
+      });
+
+      const results: BundleResult[] = [];
+
+      // Sequential from one wallet, so nonces order them. Submitted without waiting for
+      // receipts: waiting for each would spend the whole window on confirmations.
+      const hashes: { recipient: Address; hash: `0x${string}` | null; error?: string }[] =
+        [];
+
+      for (const transaction of executable.transactions) {
+        try {
+          const bundleHash = await walletClient.sendTransaction({
+            to: transaction.to,
+            data: transaction.data,
+            value: transaction.value,
+            maxFeePerGas: fees.maxFeePerGas,
+            maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+          });
+          hashes.push({ recipient: transaction.recipient, hash: bundleHash });
+        } catch (error) {
+          // One rejection must not silently abort the rest, and it must be reported
+          // per wallet rather than as a single opaque failure.
+          hashes.push({
+            recipient: transaction.recipient,
+            hash: null,
+            error: classifyTxError(error).message,
+          });
+        }
+      }
+
+      setBundle({
+        running: true,
+        results: hashes.map((entry) => ({
+          recipient: entry.recipient,
+          hash: entry.hash,
+          status: entry.hash ? ("pending" as const) : ("failed" as const),
+          detail: entry.error ?? null,
+        })),
+        error: null,
+        note: "Waiting for confirmations…",
+      });
+
+      for (const entry of hashes) {
+        if (!entry.hash) {
+          results.push({
+            recipient: entry.recipient,
+            hash: null,
+            status: "failed",
+            detail: entry.error ?? null,
+          });
+          continue;
+        }
+        try {
+          const bundleReceipt = await publicClient.waitForTransactionReceipt({
+            hash: entry.hash,
+            pollingInterval: 100,
+          });
+          results.push({
+            recipient: entry.recipient,
+            hash: entry.hash,
+            status: bundleReceipt.status === "success" ? "success" : "reverted",
+            detail:
+              bundleReceipt.status === "success"
+                ? null
+                : "Mined but reverted, most likely on the minimum-out bound. Nothing was traded.",
+          });
+        } catch {
+          results.push({
+            recipient: entry.recipient,
+            hash: entry.hash,
+            // Never called failed. The wallet has it; we merely lost track.
+            status: "unknown",
+            detail:
+              "The receipt could not be retrieved. The transaction may still confirm — " +
+              "check the hash before resending.",
+          });
+        }
+      }
+
+      setBundle({ running: false, results, error: null, note: null });
+    } catch (error) {
+      setBundle({
+        running: false,
+        results: [],
+        error: classifyTxError(error).message,
+        note: null,
+      });
+    }
+  }
 
   async function submit(): Promise<void> {
     if (!publicClient || !walletClient || !address) return;
@@ -160,6 +369,11 @@ export function LaunchForm(props: LaunchFormProps) {
         message:
           "Launched on-chain. It will appear in STUNKS once the indexer picks it up.",
       });
+
+      // ── Bundle buys, only now that a receipt exists ──
+      if (bundleEnabled && whitelistEntries.length > 0) {
+        await runBundle(receipt, hash);
+      }
     } catch (error) {
       const classified = classifyTxError(error);
       setTx({
@@ -306,7 +520,127 @@ export function LaunchForm(props: LaunchFormProps) {
             <li key={line}>{line}</li>
           ))}
         </ul>
+
+        {/* Bundle buying: opt-in, because it spends money automatically. */}
+        {whitelistEntries.length > 0 && (
+          <div className="panel inner">
+            <label className="field">
+              <span>
+                <input
+                  type="checkbox"
+                  checked={bundleEnabled}
+                  onChange={(e) => setBundleEnabled(e.target.checked)}
+                />{" "}
+                Buy for every whitelisted wallet immediately after launch
+              </span>
+            </label>
+
+            {bundleEnabled && (
+              <>
+                <label className="field">
+                  <span>Amount per wallet (ETH)</span>
+                  <input
+                    value={bundlePerWalletEth}
+                    onChange={(e) => setBundlePerWalletEth(e.target.value)}
+                    inputMode="decimal"
+                  />
+                  <small>
+                    Your wallet pays for all of them.{" "}
+                    {whitelistEntries.length} wallet(s) ×{" "}
+                    {bundlePerWalletEth || "0"} ETH ={" "}
+                    <span className="mono">
+                      {(() => {
+                        try {
+                          return formatUnitsExact(
+                            parseUnitsExact(bundlePerWalletEth || "0", 18) *
+                              BigInt(whitelistEntries.length),
+                            18,
+                          );
+                        } catch {
+                          return "—";
+                        }
+                      })()}{" "}
+                      ETH
+                    </span>{" "}
+                    plus the launch fee, your opening buy, and gas.
+                  </small>
+                </label>
+
+                <ul className="disclosures">
+                  <li>
+                    These buys are sent one after another from your wallet, after the
+                    launch has been confirmed on-chain. They are not atomic with the
+                    launch and not atomic with each other.
+                  </li>
+                  <li>
+                    Each buy carries a minimum-out priced as if every other wallet bought
+                    first, so an unexpected ordering cannot make them revert on each
+                    other.
+                  </li>
+                  <li>
+                    Beyond roughly 8 wallets the later buys will land after the{" "}
+                    {props.snipeTaxSeconds}s window. They still pay no tax, but the price
+                    will already have moved.
+                  </li>
+                  <li>
+                    If the curve is not visible on-chain yet, STUNKS sends nothing. A buy
+                    to an address with no code does not fail — it would take the ETH and
+                    give nothing back.
+                  </li>
+                </ul>
+              </>
+            )}
+          </div>
+        )}
       </section>
+
+      {(bundle.running || bundle.results.length > 0 || bundle.error !== null) && (
+        <section className="panel pad">
+          <h2>Bundle buys</h2>
+          {bundle.note !== null && <p className="hint">{bundle.note}</p>}
+          {bundle.error !== null && <p className="hint error-text">{bundle.error}</p>}
+
+          {bundle.results.length > 0 && (
+            <table className="compact">
+              <thead>
+                <tr>
+                  <th>Wallet</th>
+                  <th>Status</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {bundle.results.map((result) => (
+                  <tr key={result.recipient}>
+                    <td className="mono">{result.recipient}</td>
+                    <td>
+                      <span
+                        className={`badge ${
+                          result.status === "success"
+                            ? "ok"
+                            : result.status === "pending" || result.status === "unknown"
+                              ? "warn"
+                              : "bad"
+                        }`}
+                      >
+                        {result.status}
+                      </span>
+                    </td>
+                    <td className="hint">
+                      {result.detail ??
+                        (result.hash !== null ? (
+                          <span className="mono">{result.hash}</span>
+                        ) : (
+                          ""
+                        ))}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
 
       <section className="panel pad">
         <h2>Launch</h2>
@@ -376,4 +710,19 @@ function TxStatus({ state }: { state: TxState }) {
       )}
     </div>
   );
+}
+
+/** Per-wallet outcome of a bundle. `unknown` is a real state, not a placeholder. */
+interface BundleResult {
+  readonly recipient: string;
+  readonly hash: string | null;
+  readonly status: "pending" | "success" | "reverted" | "failed" | "unknown";
+  readonly detail: string | null;
+}
+
+interface BundleUiState {
+  readonly running: boolean;
+  readonly results: readonly BundleResult[];
+  readonly error: string | null;
+  readonly note: string | null;
 }

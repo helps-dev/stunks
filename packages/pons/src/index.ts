@@ -16,6 +16,10 @@ export * from "./curve/math.js";
 export * from "./curve/snipe-tax.js";
 export * from "./curve/quote.js";
 
+// Trading: venue guard, quote, slippage bound, transaction building.
+export * from "./trade/service.js";
+export * from "./trade/bundle.js";
+
 // Graduation: progress and venue resolution.
 export * from "./graduation/progress.js";
 export * from "./graduation/venue.js";

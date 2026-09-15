@@ -1,0 +1,63 @@
+"# STUNKS indexer on Fly.io.
+#
+# The region matters: put the indexer in the same region as the database. Neon reports
+# its region in the connection host (for example c-7.us-east-2 means us-east-2), and the
+# matching Fly region is set below. Every database round trip then costs single-digit
+# milliseconds instead of a few hundred.
+#
+# Deploy from the REPOSITORY ROOT so the Dockerfile can see the workspace packages:
+#
+#   fly launch --config apps/indexer/fly.toml --dockerfile apps/indexer/Dockerfile --no-deploy
+#   fly secrets set DATABASE_URL='...' DIRECT_URL='...' RPC_ENDPOINTS='...'
+#   fly secrets set HYPERSYNC_BEARER_TOKEN='...'   # optional, for fast backfill
+#   fly deploy --config apps/indexer/fly.toml --dockerfile apps/indexer/Dockerfile
+#
+# Run `fly secrets set`, never put a credential in this file — it is committed."
+
+app = "stunks-indexer"
+primary_region = "iad"   # us-east-1/2 area; match this to the Neon region
+
+[build]
+
+[env]
+  CHAIN_ID = "4663"
+  # Deploy block of the Pons V2 factory. Starting at genesis would scan 26.8M blocks
+  # that cannot contain a Pons event.
+  INDEXER_START_BLOCK = "26841846"
+  # "rpc" is viable now that batched writes lifted throughput to ~100 blocks/second,
+  # but "hypersync" is still far faster for a cold backfill. Set the token as a secret
+  # and switch this to "hypersync" if you want the initial catch-up in minutes.
+  BACKFILL_SOURCE = "rpc"
+  CONFIRMATION_DEPTH = "12"
+  LOG_WINDOW = "100"
+  TAIL_INTERVAL_MS = "1000"
+  HEALTH_PORT = "9464"
+
+[http_service]
+  internal_port = 9464
+  force_https = true
+  # The indexer is a worker with a health endpoint, not a web service. It must never be
+  # scaled to zero: a stopped indexer silently stops indexing, and the lag is only
+  # visible on the page that depends on it.
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "60s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  # The workload is I/O-bound, not CPU-bound: it waits on RPC and Postgres. Memory
+  # matters more than cores because of the block-timestamp cache.
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+# Exactly one machine. Two indexers on the same streams would race on checkpoints —
+# the writes are idempotent so nothing corrupts, but they would duplicate every RPC
+# call and fight over the same ranges for no benefit.
+[deploy]
+  strategy = "immediate"
