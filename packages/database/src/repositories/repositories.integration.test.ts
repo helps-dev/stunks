@@ -17,7 +17,10 @@ import { createRepositories, type Repositories } from "./index.js";
 const enabled = process.env.RUN_DB_TESTS === "1";
 const describeDb = enabled ? describe : describe.skip;
 
-const CHAIN_ID = 4663;
+// Never use 4663 here. Reorg recovery intentionally deletes every indexed trade above
+// a block, which is correct for the indexer but catastrophic if an integration fixture
+// shares the real Robinhood Chain namespace. This ID exists only inside test rows.
+const CHAIN_ID = 9_999_999;
 const MARKER = "repo-integration-test";
 const STREAM = `${MARKER}-stream`;
 
@@ -157,6 +160,64 @@ describeDb("TokenRepository.recordLaunch", () => {
     const token = await repos.tokens.findByAddress(CHAIN_ID, launchInput("6").address);
     expect(token!.hadWhitelistBundle).toBe(true);
     expect(token!.whitelistSize).toBe(31);
+  });
+});
+
+describeDb("TokenBatchRepository.updateStatsMany", () => {
+  it("updates many tokens in one lossless set-based write", async () => {
+    const first = await repos.tokens.recordLaunch(launchInput("60"));
+    const second = await repos.tokens.recordLaunch(launchInput("61"));
+    const lastTradeAt = new Date("2026-09-15T00:00:00.000Z");
+
+    const updated = await repos.tokenBatch.updateStatsMany([
+      {
+        tokenId: first.tokenId,
+        stats: {
+          realQuoteReserve: 1_234_567_890_123_456_789n,
+          graduationBps: 2_345,
+          price: 9_876_543_210_987_654_321n,
+          marketCap: SUPPLY,
+          volume24h: 777_777_777_777_777_777n,
+          volumeTotal: 888_888_888_888_888_888n,
+          holderCount: 12,
+          tradeCount: 34,
+          buyCount: 21,
+          sellCount: 13,
+          lastTradeAt,
+        },
+      },
+      {
+        tokenId: second.tokenId,
+        stats: {
+          realQuoteReserve: 42n,
+          graduationBps: 1,
+          price: 99n,
+          marketCap: 123n,
+          volume24h: 456n,
+          volumeTotal: 789n,
+          holderCount: 2,
+          tradeCount: 3,
+          buyCount: 2,
+          sellCount: 1,
+        },
+      },
+    ]);
+
+    expect(updated).toBe(2);
+    const rows = await prisma.token.findMany({
+      where: { id: { in: [first.tokenId, second.tokenId] } },
+      orderBy: { id: "asc" },
+    });
+    const firstRow = rows.find((row) => row.id === first.tokenId)!;
+    const secondRow = rows.find((row) => row.id === second.tokenId)!;
+
+    expect(toBigInt(firstRow.realQuoteReserve)).toBe(1_234_567_890_123_456_789n);
+    expect(toBigInt(firstRow.price)).toBe(9_876_543_210_987_654_321n);
+    expect(firstRow.graduationBps).toBe(2_345);
+    expect(firstRow.lastTradeAt).toEqual(lastTradeAt);
+    expect(toBigInt(secondRow.realQuoteReserve)).toBe(42n);
+    expect(secondRow.tradeCount).toBe(3);
+    expect(secondRow.lastTradeAt).toBeNull();
   });
 });
 
@@ -369,6 +430,14 @@ describeDb("failed block tracking", () => {
 
     const failures = await repos.checkpoints.listUnresolvedFailures(CHAIN_ID);
     expect(failures.filter((f) => f.stream === STREAM)).toHaveLength(0);
+  });
+
+  it("makes resolution a no-op when a successful scan has no prior failure", async () => {
+    // Scanner calls this after every successful range; a missing row is normal, not an
+    // exception. `update()` made ordinary successful scans fail after checkpointing.
+    await expect(
+      repos.checkpoints.resolveFailedBlock(CHAIN_ID, STREAM, 9_999_999n),
+    ).resolves.toBeUndefined();
   });
 
   it("surfaces unresolved failures in the health snapshot", async () => {

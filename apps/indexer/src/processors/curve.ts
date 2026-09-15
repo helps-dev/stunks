@@ -252,38 +252,45 @@ export async function refreshTokenStatsBatch(
   );
   const stateByToken = new Map(states.map((entry) => [entry.tokenId, entry.state]));
 
-  await Promise.all(
-    tokenIds.map(async (tokenId) => {
-      const token = tokens.get(tokenId);
-      if (!token) return;
+  // One set-based write for every touched token. The earlier bounded worker approach
+  // prevented pool exhaustion but still paid one network round trip per token; on Neon
+  // that kept the curve stream below the chain's 10 blocks/second. `updateStatsMany`
+  // preserves the same derived-field boundary as TokenRepository.updateStats, but sends
+  // all values in one PostgreSQL statement.
+  const statsRows: { tokenId: string; stats: Parameters<typeof deps.repos.tokens.updateStats>[1] }[] =
+    [];
+  for (const tokenId of tokenIds) {
+    const token = tokens.get(tokenId);
+    if (!token) continue;
 
-      const aggregate = totals.get(tokenId) ?? {
-        volume: 0n,
-        tradeCount: 0,
-        buyCount: 0,
-        sellCount: 0,
-      };
-      const dayAggregate = daily.get(tokenId) ?? {
-        volume: 0n,
-        tradeCount: 0,
-        buyCount: 0,
-        sellCount: 0,
-      };
-      const lastTrade = latest.get(tokenId);
-      const state = stateByToken.get(tokenId) ?? null;
+    const aggregate = totals.get(tokenId) ?? {
+      volume: 0n,
+      tradeCount: 0,
+      buyCount: 0,
+      sellCount: 0,
+    };
+    const dayAggregate = daily.get(tokenId) ?? {
+      volume: 0n,
+      tradeCount: 0,
+      buyCount: 0,
+      sellCount: 0,
+    };
+    const lastTrade = latest.get(tokenId);
+    const state = stateByToken.get(tokenId) ?? null;
 
-      let realQuoteReserve = 0n;
-      let graduationBps = 0;
-      if (state) {
-        realQuoteReserve = state.realQuoteReserve;
-        // eslint-disable-next-line no-restricted-syntax -- basis points 0..10000 stored in an int column, not a money value
-        graduationBps = Number(ratioBps(state.realQuoteReserve, state.graduationThreshold));
-        if (graduationBps > 10_000) graduationBps = 10_000;
-      }
+    let realQuoteReserve = 0n;
+    let graduationBps = 0;
+    if (state) {
+      realQuoteReserve = state.realQuoteReserve;
+      // eslint-disable-next-line no-restricted-syntax -- basis points 0..10000 stored in an int column, not a money value
+      graduationBps = Number(ratioBps(state.realQuoteReserve, state.graduationThreshold));
+      if (graduationBps > 10_000) graduationBps = 10_000;
+    }
 
-      const price = lastTrade ? lastTrade.price : 0n;
-
-      await deps.repos.tokens.updateStats(tokenId, {
+    const price = lastTrade ? lastTrade.price : 0n;
+    statsRows.push({
+      tokenId,
+      stats: {
         realQuoteReserve,
         graduationBps,
         price,
@@ -295,9 +302,10 @@ export async function refreshTokenStatsBatch(
         buyCount: aggregate.buyCount,
         sellCount: aggregate.sellCount,
         ...(lastTrade ? { lastTradeAt: lastTrade.timestamp } : {}),
-      });
-    }),
-  );
+      },
+    });
+  }
+  await deps.repos.tokenBatch.updateStatsMany(statsRows);
 }
 
 /**

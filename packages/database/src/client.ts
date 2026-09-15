@@ -18,6 +18,26 @@ export function getPrisma(): PrismaClient {
   return globalForPrisma.stunksPrisma;
 }
 
+export function isDatabaseAvailabilityError(error: unknown): boolean {
+  const candidate = error as { code?: unknown; message?: unknown } | null;
+  const code = typeof candidate?.code === "string" ? candidate.code : undefined;
+  // Prisma's documented availability/pool failure codes. They are retryable because
+  // neither says anything about the correctness of a chain block or decoded event.
+  if (code === "P1001" || code === "P1017" || code === "P2024") return true;
+
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof candidate?.message === "string"
+        ? candidate.message
+        : String(error);
+  return (
+    /can't reach database server/i.test(message) ||
+    /timed out fetching a new connection from the connection pool/i.test(message) ||
+    /server has closed the connection/i.test(message)
+  );
+}
+
 /**
  * Wait until the database answers.
  *

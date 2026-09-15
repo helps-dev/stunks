@@ -1,5 +1,6 @@
-import type { Address, PublicClient } from "viem";
+import type { Address, Hex, PublicClient } from "viem";
 import { createIndexerClient } from "@stunks/web3";
+import { CURVE_TOPICS, FACTORY_TOPICS } from "@stunks/pons";
 import { createRepositories, getPrisma, waitForDatabase } from "@stunks/database";
 import { STREAMS, loadIndexerConfig } from "./config.js";
 import { Scanner, type ScanTickResult } from "./scanner.js";
@@ -111,6 +112,11 @@ async function main(): Promise<void> {
   const factoryAddresses = async (): Promise<readonly Address[]> => [config.factory];
   const curveAddresses = async (): Promise<readonly Address[]> =>
     (await repos.tokens.listActiveCurves(config.CHAIN_ID)) as Address[];
+  // Filter at the node, not after downloading every ERC-20 Transfer and unrelated
+  // curve event. The maps are constructed from verified ABI selectors, so this cannot
+  // omit a Pons event the processors understand.
+  const factoryTopics = Object.keys(FACTORY_TOPICS) as Hex[];
+  const curveTopics = Object.keys(CURVE_TOPICS) as Hex[];
 
   const makeFactoryScanner = (source: LogSource) =>
     new Scanner({
@@ -123,6 +129,7 @@ async function main(): Promise<void> {
       startBlock: config.startBlock,
       confirmationDepth: config.CONFIRMATION_DEPTH,
       addresses: factoryAddresses,
+      topics0: factoryTopics,
       log,
       process: async (logs) => {
         const result = await processFactoryLogs(logs, {
@@ -153,6 +160,7 @@ async function main(): Promise<void> {
       startBlock: config.startBlock,
       confirmationDepth: config.CONFIRMATION_DEPTH,
       addresses: curveAddresses,
+      topics0: curveTopics,
       // Without any known curve there is nothing to filter on, and an unfiltered
       // query would pull every log on the chain.
       requireAddresses: true,

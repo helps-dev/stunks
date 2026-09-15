@@ -601,3 +601,37 @@ an estimate.
 
 **Resolution path:** close U2 by probing V4 periphery addresses on 4663 and replaying a
 real swap against a graduated pool. Until then the refusal stands.
+
+---
+
+## R27 — H — Integration test must never share the mainnet index namespace
+
+**Incident (development database, 2026-09-15):** the repository integration suite used
+chain ID `4663`, the real Robinhood Chain ID. Its reorg-recovery test correctly called
+`deleteAboveBlock(4663, 150)`, but because the database also contained real indexed
+mainnet trades, that operation deleted all trades above block 150 — roughly 51,000 rows
+at the time. The chain was never touched; tokens and creators remained, and every lost
+trade can be recovered from chain history. The database's indexed trade history was not
+safe, however.
+
+**Root cause:** the test fixture was isolated only by marker fields on rows it created.
+`deleteAboveBlock` intentionally operates at chain scope because that is exactly what a
+real reorg rollback needs. It cannot safely be restricted to a fixture marker in
+production code. The fixture therefore chose the wrong isolation boundary.
+
+**Mitigation implemented:** database integration fixtures now use the synthetic chain ID
+`9_999_999`, which cannot overlap with a real configured chain. The reorg test still
+exercises the real chain-scoped deletion semantics, but only inside its own namespace.
+
+**Recovery choices for the affected development database:**
+
+1. Restore Neon to a point before the test, if point-in-time recovery is enabled. This
+   is fastest and preserves the prior index exactly.
+2. Rebuild the curve-trade stream from on-chain logs using HyperSync. This is
+   authoritative, but needs a free Envio token and a controlled curve-checkpoint rewind.
+   RPC-only replay from the first launch was measured in days, not minutes.
+
+**Do not** merely set the curve checkpoint to head or fabricate aggregate values. The
+blockchain is the source of truth; a partial history presented as complete would be a
+new, worse data error. A replay changes many database rows and consumes RPC/HyperSync
+capacity, so it requires explicit operator approval.

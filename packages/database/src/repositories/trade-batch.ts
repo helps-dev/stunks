@@ -1,4 +1,7 @@
+import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
+import { toDecimal } from "../amount.js";
+import type { TokenStatsInput } from "./token.js";
 
 /**
  * Batched trade aggregation.
@@ -208,5 +211,75 @@ export class TokenBatchRepository {
       });
     }
     return result;
+  }
+
+  /**
+   * Write indexed-derived stats for a whole curve window in one round trip.
+   *
+   * `updateStats` is intentionally kept for single-token callers. A busy curve window
+   * may touch 50–100 tokens, however, and one Prisma update per token both consumes
+   * Neon pool connections and spends tens of seconds on round-trip latency. This is a
+   * set-based Postgres update: each value row is lossless Decimal(78,0), and only the
+   * indexed-derived columns that `TokenRepository.updateStats` is allowed to touch are
+   * present in the SET list.
+   *
+   * `lastTradeAt` mirrors the single-token method's semantics: an absent last trade
+   * leaves the existing timestamp intact rather than replacing it with null.
+   */
+  async updateStatsMany(
+    rows: readonly { readonly tokenId: string; readonly stats: TokenStatsInput }[],
+  ): Promise<number> {
+    if (rows.length === 0) return 0;
+
+    const values = rows.map(({ tokenId, stats }) => Prisma.sql`
+      (
+        ${tokenId},
+        ${toDecimal(stats.realQuoteReserve)},
+        ${stats.graduationBps},
+        ${toDecimal(stats.price)},
+        ${toDecimal(stats.marketCap)},
+        ${toDecimal(stats.volume24h)},
+        ${toDecimal(stats.volumeTotal)},
+        ${stats.holderCount},
+        ${stats.tradeCount},
+        ${stats.buyCount},
+        ${stats.sellCount},
+        ${stats.lastTradeAt ?? null}
+      )
+    `);
+
+    return this.prisma.$executeRaw`
+      UPDATE tokens AS t
+      SET
+        "realQuoteReserve" = v."realQuoteReserve",
+        "graduationBps" = v."graduationBps",
+        price = v.price,
+        "marketCap" = v."marketCap",
+        "volume24h" = v."volume24h",
+        "volumeTotal" = v."volumeTotal",
+        "holderCount" = v."holderCount",
+        "tradeCount" = v."tradeCount",
+        "buyCount" = v."buyCount",
+        "sellCount" = v."sellCount",
+        "lastTradeAt" = COALESCE(v."lastTradeAt", t."lastTradeAt"),
+        "updatedAt" = now()
+      FROM (
+        VALUES ${Prisma.join(values)}
+      ) AS v(
+        id,
+        "realQuoteReserve",
+        "graduationBps",
+        price,
+        "marketCap",
+        "volume24h",
+        "volumeTotal",
+        "holderCount",
+        "tradeCount",
+        "buyCount",
+        "sellCount",
+        "lastTradeAt"
+      )
+      WHERE t.id = v.id
+    `;
   }
 }

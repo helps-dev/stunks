@@ -284,6 +284,28 @@ export class RpcPool {
       });
     }
 
+    // A null result for a block lookup is a JSON-RPC *success*, so nothing above
+    // catches it — yet it is exactly how a lagging endpoint reports "I have not
+    // indexed that block yet". viem then turns the null into BlockNotFoundError and
+    // the caller never learns another endpoint could have answered.
+    //
+    // Observed on Robinhood Chain near head: one endpoint serves eth_blockNumber
+    // while another, a few blocks behind, returns null for that same block.
+    //
+    // Only block lookups are treated this way. A null from, say,
+    // eth_getTransactionReceipt legitimately means "pending" and must be returned.
+    if (
+      envelope.result === null &&
+      (method === "eth_getBlockByNumber" || method === "eth_getBlockByHash")
+    ) {
+      throw new RpcCallError({
+        kind: "BLOCK_UNAVAILABLE",
+        endpoint: endpoint.url,
+        method,
+        message: `endpoint returned no block for ${JSON.stringify(params[0] ?? null)}`,
+      });
+    }
+
     this.recordSuccess(endpoint, this.now() - startedAt);
     return envelope.result as T;
   }

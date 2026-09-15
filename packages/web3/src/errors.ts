@@ -14,6 +14,10 @@ export type RpcFailureKind =
   | "NON_JSON_RESPONSE"
   | "RATE_LIMITED"
   | "LOG_RANGE_TOO_WIDE"
+  /** Endpoint has not indexed a block another endpoint already reported as head. */
+  | "BLOCK_UNAVAILABLE"
+  /** Provider accepts JSON-RPC but is temporarily unable to serve the query. */
+  | "UPSTREAM_UNAVAILABLE"
   | "TIMEOUT"
   | "NETWORK"
   | "HTTP_ERROR"
@@ -78,6 +82,8 @@ export function isRetryable(kind: RpcFailureKind): boolean {
   switch (kind) {
     case "NON_JSON_RESPONSE":
     case "RATE_LIMITED":
+    case "BLOCK_UNAVAILABLE":
+    case "UPSTREAM_UNAVAILABLE":
     case "TIMEOUT":
     case "NETWORK":
     case "HTTP_ERROR":
@@ -98,9 +104,29 @@ const LOG_RANGE_PATTERNS = [
   /log response size exceeded/i,
 ];
 
+const BLOCK_UNAVAILABLE_PATTERNS = [
+  // Observed on Robinhood RPC nodes when one provider reports the head before another
+  // one has indexed it. This is an availability problem, not an invalid block number.
+  /\bblock at number\s+"?\d+"?\s+could not be found\b/i,
+];
+
+const UPSTREAM_UNAVAILABLE_PATTERNS = [
+  // OrdoFi has returned both forms while its eth_getLogs backend is overloaded. They
+  // are not caller mistakes: retrying a smaller range cannot make a one-block query
+  // acceptable, and a different provider can serve the same query.
+  /\bnetwork is busy,? please try again\b/i,
+  /\bblock\s+\d+\s+alone returns more logs than the upstream will serve\b/i,
+];
+
 export function classifyRpcErrorMessage(message: string): RpcFailureKind {
   if (LOG_RANGE_PATTERNS.some((pattern) => pattern.test(message))) {
     return "LOG_RANGE_TOO_WIDE";
+  }
+  if (BLOCK_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(message))) {
+    return "BLOCK_UNAVAILABLE";
+  }
+  if (UPSTREAM_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(message))) {
+    return "UPSTREAM_UNAVAILABLE";
   }
   if (RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(message))) {
     return "RATE_LIMITED";

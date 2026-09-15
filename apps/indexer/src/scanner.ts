@@ -1,5 +1,5 @@
 import type { Address, Hex, PublicClient } from "viem";
-import type { Repositories } from "@stunks/database";
+import { isDatabaseAvailabilityError, type Repositories } from "@stunks/database";
 import { checkForReorg, safeHead } from "./reorg.js";
 import { RangeTooWideError, type LogSource, type RawLog } from "./sources/types.js";
 
@@ -41,6 +41,8 @@ export interface ScannerOptions {
   readonly confirmationDepth: number;
   /** Addresses to filter on. A function, because the curve set grows as tokens launch. */
   readonly addresses: () => Promise<readonly Address[]>;
+  /** Optional OR-filter for event topic0 values, applied by the RPC node. */
+  readonly topics0?: readonly Hex[];
   /** Skip the query entirely when the address set is empty and a filter is required. */
   readonly requireAddresses?: boolean;
   /**
@@ -117,7 +119,18 @@ export class Scanner {
       };
     }
 
-    const head = await options.source.head();
+    let head: bigint;
+    try {
+      head = await options.source.head();
+    } catch (error) {
+      // A provider failing to state its head says nothing about the block at the
+      // checkpoint. Preserve it, wait, and ask again; never create a failed-block row.
+      return this.handleSourceFailure(
+        checkpoint.lastProcessedBlock,
+        checkpoint.lastProcessedBlock,
+        error,
+      );
+    }
     const confirmed = safeHead(head, options.confirmationDepth);
 
     // A dependent stream cannot run past the stream it depends on.
@@ -158,47 +171,14 @@ export class Scanner {
       };
     }
 
+    let batch;
     try {
-      const batch = await options.source.getLogs({
+      batch = await options.source.getLogs({
         fromBlock,
         toBlock: boundary,
         addresses,
+        ...(options.topics0 !== undefined ? { topics0: options.topics0 } : {}),
       });
-
-      const reached = batch.reachedBlock;
-      if (reached < fromBlock) {
-        // The source could not cover even one block. Not fatal, but not progress
-        // either — returning early avoids a checkpoint that would skip blocks.
-        return {
-          scanned: 0n,
-          logs: 0,
-          fromBlock,
-          toBlock: checkpoint.lastProcessedBlock,
-          caughtUp: false,
-          reorged: false,
-        };
-      }
-
-      await options.process(batch.logs, { fromBlock, toBlock: reached });
-
-      // Checkpoint to what was reached, with that block's hash so the next tick can
-      // detect a reorg.
-      const reachedHash = await options.source.blockHash(reached);
-      await options.repos.checkpoints.advance({
-        chainId: options.chainId,
-        stream: options.stream,
-        toBlock: reached,
-        blockHash: reachedHash,
-      });
-
-      return {
-        scanned: reached - fromBlock + 1n,
-        logs: batch.logs.length,
-        fromBlock,
-        toBlock: reached,
-        caughtUp: reached >= boundary,
-        reorged: false,
-      };
     } catch (error) {
       if (error instanceof RangeTooWideError) {
         // The endpoint is healthy; the request was too ambitious. Retry next tick
@@ -216,13 +196,48 @@ export class Scanner {
           reorged: false,
         };
       }
+      return this.handleSourceFailure(fromBlock, checkpoint.lastProcessedBlock, error);
+    }
 
+    const reached = batch.reachedBlock;
+    if (reached < fromBlock) {
+      // The source could not cover even one block. Not fatal, but not progress either
+      // — returning early avoids a checkpoint that would skip blocks.
+      return {
+        scanned: 0n,
+        logs: 0,
+        fromBlock,
+        toBlock: checkpoint.lastProcessedBlock,
+        caughtUp: false,
+        reorged: false,
+      };
+    }
+
+    // Read the hash BEFORE calling the processor. A multi-provider RPC pool can let
+    // one endpoint report a head that another has not indexed yet. If the hash read
+    // fails after processing, idempotency keeps data correct on retry but needlessly
+    // replays the entire window. Before processing, no write occurs at all.
+    let reachedHash: string;
+    try {
+      reachedHash = await options.source.blockHash(reached);
+    } catch (error) {
+      return this.handleSourceFailure(fromBlock, checkpoint.lastProcessedBlock, error);
+    }
+
+    try {
+      await options.process(batch.logs, { fromBlock, toBlock: reached });
+    } catch (error) {
+      if (isDatabaseAvailabilityError(error)) {
+        // A failed Neon connection says nothing about this block's logs. The batch may
+        // even have partially written idempotent rows before the outage; retrying from
+        // the unchanged checkpoint is safe and must not leave a permanent false
+        // failed-block row.
+        return this.handleDatabaseFailure(fromBlock, checkpoint.lastProcessedBlock, error);
+      }
+      // The processor reached a concrete log range and could not make sense of it.
+      // Keep this block visible for diagnosis and bounded retry.
       const message = error instanceof Error ? error.message : String(error);
-      await options.repos.checkpoints.recordError(
-        options.chainId,
-        options.stream,
-        message,
-      );
+      await options.repos.checkpoints.recordError(options.chainId, options.stream, message);
       await options.repos.checkpoints.recordFailedBlock({
         chainId: options.chainId,
         stream: options.stream,
@@ -231,6 +246,102 @@ export class Scanner {
       });
       throw error;
     }
+
+    try {
+      await options.repos.checkpoints.advance({
+        chainId: options.chainId,
+        stream: options.stream,
+        toBlock: reached,
+        blockHash: reachedHash,
+      });
+      // A successful replay clears an earlier failed-block record for its first
+      // block. `resolveFailedBlock` is deliberately idempotent, so the normal path
+      // does not need to know whether a failure existed.
+      await options.repos.checkpoints.resolveFailedBlock(
+        options.chainId,
+        options.stream,
+        fromBlock,
+      );
+    } catch (error) {
+      if (isDatabaseAvailabilityError(error)) {
+        return this.handleDatabaseFailure(fromBlock, checkpoint.lastProcessedBlock, error);
+      }
+      // Database/checkpoint failures are infrastructure incidents, not bad chain
+      // blocks. Surface and retry them without poisoning the failed-block table.
+      const message = error instanceof Error ? error.message : String(error);
+      await options.repos.checkpoints.recordError(options.chainId, options.stream, message);
+      throw error;
+    }
+
+    return {
+      scanned: reached - fromBlock + 1n,
+      logs: batch.logs.length,
+      fromBlock,
+      toBlock: reached,
+      caughtUp: reached >= boundary,
+      reorged: false,
+    };
+  }
+
+  /**
+   * Database availability is different from a bad decoded block. Do not attempt to
+   * write `lastError` while the database itself is down — that write would fail too
+   * and turn a retryable outage into a noisy tail exception. The process log carries
+   * the diagnostic; the unchanged checkpoint carries the recovery point.
+   */
+  private async handleDatabaseFailure(
+    fromBlock: bigint,
+    lastProcessedBlock: bigint,
+    error: unknown,
+  ): Promise<ScanTickResult> {
+    const message = error instanceof Error ? error.message : String(error);
+    this.options.log("database unavailable, retaining checkpoint", {
+      stream: this.options.stream,
+      fromBlock: fromBlock.toString(),
+      error: message,
+    });
+    return {
+      scanned: 0n,
+      logs: 0,
+      fromBlock,
+      toBlock: lastProcessedBlock,
+      caughtUp: false,
+      reorged: false,
+    };
+  }
+
+  /**
+   * Record a temporary source problem without claiming a chain block is bad.
+   *
+   * A pool can legitimately have providers at different heads. Returning no progress
+   * makes backfill use its existing backoff and tail try again next interval, both from
+   * the unchanged checkpoint.
+   */
+  private async handleSourceFailure(
+    fromBlock: bigint,
+    lastProcessedBlock: bigint,
+    error: unknown,
+  ): Promise<ScanTickResult> {
+    const message = error instanceof Error ? error.message : String(error);
+    await this.options.repos.checkpoints.recordError(
+      this.options.chainId,
+      this.options.stream,
+      message,
+    );
+    this.options.log("source unavailable, retaining checkpoint", {
+      stream: this.options.stream,
+      fromBlock: fromBlock.toString(),
+      source: this.options.source.name,
+      error: message,
+    });
+    return {
+      scanned: 0n,
+      logs: 0,
+      fromBlock,
+      toBlock: lastProcessedBlock,
+      caughtUp: false,
+      reorged: false,
+    };
   }
 
   /** Run until caught up. Returns the number of blocks covered. */

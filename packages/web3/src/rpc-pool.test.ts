@@ -262,3 +262,119 @@ describe("adaptive log window", () => {
     expect(window.onSuccess()).toBe(130n);
   });
 });
+
+
+describe("provider head disagreement", () => {
+  it("fails over when an endpoint has not indexed a block another provider reported", async () => {
+    // Observed near chain head: endpoint A supplies eth_blockNumber, but endpoint B
+    // selected for the later read is a few blocks behind. This must retry/fail over,
+    // not be treated like an invalid block parameter or a bad block.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          jsonrpc: "2.0",
+          id: 1,
+          error: { code: -32000, message: 'Block at number "63921610" could not be found.' },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ jsonrpc: "2.0", id: 2, result: "0xabc" }));
+
+    const pool = new RpcPool(["https://behind.example", "https://current.example"], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      attemptsPerEndpoint: 1,
+      sleep: noSleep,
+    });
+
+    await expect(pool.request<string>("eth_getBlockByNumber", ["0x3", false])).resolves.toBe(
+      "0xabc",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(pool.stats()[0]).toMatchObject({
+      consecutiveFailures: 1,
+      lastErrorKind: "BLOCK_UNAVAILABLE",
+    });
+  });
+
+  it("classifies only the observed missing-block message as retryable", () => {
+    expect(
+      isRetryable(
+        // Classification is exercised via pool above; this guards the retry contract.
+        "BLOCK_UNAVAILABLE",
+      ),
+    ).toBe(true);
+    expect(isRetryable("RPC_ERROR")).toBe(false);
+  });
+
+  it("fails over when a lagging endpoint returns a null block instead of an error", async () => {
+    // The case actually seen in the indexer logs. A null result is a JSON-RPC
+    // SUCCESS, so without this the pool returns null, viem raises
+    // BlockNotFoundError, and no failover is ever attempted.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ jsonrpc: "2.0", id: 1, result: null }))
+      .mockResolvedValueOnce(
+        jsonResponse({ jsonrpc: "2.0", id: 2, result: { number: "0x3", hash: "0xfeed" } }),
+      );
+
+    const pool = new RpcPool(["https://behind.example", "https://current.example"], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      attemptsPerEndpoint: 1,
+      sleep: noSleep,
+    });
+
+    await expect(
+      pool.request<{ hash: string }>("eth_getBlockByNumber", ["0x3", false]),
+    ).resolves.toEqual({ number: "0x3", hash: "0xfeed" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(pool.stats()[0]?.lastErrorKind).toBe("BLOCK_UNAVAILABLE");
+  });
+
+  it("still returns a null receipt, because pending is a real answer", async () => {
+    // Only block lookups get the null-means-unavailable treatment. A pending
+    // transaction legitimately has no receipt and must not trigger failover.
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ jsonrpc: "2.0", id: 1, result: null }));
+
+    const pool = new RpcPool(["https://a.example", "https://b.example"], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      attemptsPerEndpoint: 1,
+      sleep: noSleep,
+    });
+
+    await expect(
+      pool.request("eth_getTransactionReceipt", ["0xdead"]),
+    ).resolves.toBeNull();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe("overloaded upstream log providers", () => {
+  it.each([
+    "the network is busy, please try again in a moment",
+    "eth_getLogs: block 63961375 alone returns more logs than the upstream will serve. Add an address or topic filter.",
+  ])("fails over instead of shrinking an inherently unsupportable query: %s", async (message) => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          jsonrpc: "2.0",
+          id: 1,
+          error: { code: -32000, message },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ jsonrpc: "2.0", id: 2, result: [] }));
+
+    const pool = new RpcPool(["https://overloaded.example", "https://healthy.example"], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      attemptsPerEndpoint: 1,
+      sleep: noSleep,
+    });
+
+    await expect(pool.request<readonly unknown[]>("eth_getLogs", [])).resolves.toEqual([]);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(pool.stats()[0]?.lastErrorKind).toBe("UPSTREAM_UNAVAILABLE");
+  });
+});

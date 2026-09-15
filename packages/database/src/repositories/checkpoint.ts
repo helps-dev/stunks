@@ -195,13 +195,19 @@ export class CheckpointRepository {
     });
   }
 
+  /**
+   * Mark a previously failed block resolved after its range is processed successfully.
+   *
+   * `updateMany` makes the normal success path safe when no earlier failure exists —
+   * avoiding an extra read merely to learn whether cleanup is needed.
+   */
   async resolveFailedBlock(
     chainId: number,
     stream: string,
     blockNumber: bigint,
   ): Promise<void> {
-    await this.prisma.failedBlock.update({
-      where: { chainId_stream_blockNumber: { chainId, stream, blockNumber } },
+    await this.prisma.failedBlock.updateMany({
+      where: { chainId, stream, blockNumber, resolved: false },
       data: { resolved: true },
     });
   }

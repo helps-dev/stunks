@@ -1,11 +1,48 @@
 import type { Hex, PublicClient } from "viem";
 import { AdaptiveLogWindow, RpcCallError } from "@stunks/web3";
+import type { Address } from "viem";
 import {
   RangeTooWideError,
   type LogBatch,
   type LogQuery,
   type LogSource,
 } from "./types.js";
+
+/**
+ * Smallest verified address-selector cap among the providers in the pool.
+ *
+ * OrdoFi rejects a query with 1,001 addresses ("only 1000 are allowed"). The curve
+ * stream has thousands of dynamically deployed contracts, so a single address array
+ * works only until it suddenly does not. Split at the lowest known cap; every chunk
+ * covers the same block range, so their union is complete and no block is skipped.
+ */
+export const MAX_LOG_ADDRESSES_PER_QUERY = 1_000;
+
+/** Split an eth_getLogs address filter without changing its block range. */
+function addressChunks(
+  addresses: readonly Address[],
+  topicSelectorCount: number,
+): readonly (readonly Address[])[] {
+  if (addresses.length === 0) return [[]];
+  // OrdoFi counts every OR-ed address and topic selector against the same cap. A
+  // curve scan has seven relevant topic0 values, so 1,000 addresses plus those topics
+  // would still be rejected as 1,007 selectors. One address is always retained even
+  // if a future event list somehow exceeds the provider cap; that query then fails
+  // visibly rather than silently dropping a topic.
+  const addressesPerChunk = Math.max(1, MAX_LOG_ADDRESSES_PER_QUERY - topicSelectorCount);
+  const chunks: Address[][] = [];
+  for (let offset = 0; offset < addresses.length; offset += addressesPerChunk) {
+    chunks.push(addresses.slice(offset, offset + addressesPerChunk));
+  }
+  return chunks;
+}
+
+/**
+ * Two concurrent address groups shorten a 9,000-curve scan without bursting every
+ * request through a public RPC endpoint at once. The pool still handles rate limits and
+ * failover; this limit merely keeps one logical scan from monopolising it.
+ */
+export const MAX_CONCURRENT_LOG_ADDRESS_QUERIES = 2;
 
 /**
  * RPC log source.
@@ -52,11 +89,37 @@ export class RpcLogSource implements LogSource {
     const toBlock = requested > allowed ? query.fromBlock + allowed - 1n : query.toBlock;
 
     try {
-      const logs = await this.client.getLogs({
-        ...(query.addresses.length > 0 ? { address: [...query.addresses] } : {}),
-        fromBlock: query.fromBlock,
-        toBlock,
-      });
+      // A provider cap applies to address selectors as well as block range. Run each
+      // address chunk against exactly the same block range, then combine the results.
+      // A small worker pool prevents 9,000 curves from becoming either nine fully
+      // sequential requests (too slow) or nine simultaneous public-RPC bursts (too
+      // throttle-prone).
+      const chunks = addressChunks(query.addresses, query.topics0?.length ?? 0);
+      const chunkLogs = new Array<Awaited<ReturnType<PublicClient["getLogs"]>>>(
+        chunks.length,
+      );
+      let nextChunk = 0;
+      const readChunk = async (): Promise<void> => {
+        for (;;) {
+          const index = nextChunk;
+          nextChunk += 1;
+          const addresses = chunks[index];
+          if (addresses === undefined) return;
+          chunkLogs[index] = await this.client.getLogs({
+            ...(addresses.length > 0 ? { address: [...addresses] } : {}),
+            ...(query.topics0 !== undefined ? { topics: [query.topics0] } : {}),
+            fromBlock: query.fromBlock,
+            toBlock,
+          });
+        }
+      };
+      await Promise.all(
+        Array.from(
+          { length: Math.min(MAX_CONCURRENT_LOG_ADDRESS_QUERIES, chunks.length) },
+          () => readChunk(),
+        ),
+      );
+      const logs = chunkLogs.flat();
 
       this.window.onSuccess();
 
