@@ -5,6 +5,9 @@ export * from "./abi/index.js";
 export * from "./client/addresses.js";
 export * from "./client/reads.js";
 
+// Launch: whitelist validation with the verified 31-address cap.
+export * from "./launch/exemptions.js";
+
 // Curve: exact math, snipe tax, quoting.
 export * from "./curve/math.js";
 export * from "./curve/snipe-tax.js";

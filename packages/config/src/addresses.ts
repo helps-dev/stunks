@@ -26,6 +26,23 @@ export const ZERO_ADDRESS: Address = "0x0000000000000000000000000000000000000000
 /** Alias that reads better at Pons call sites: `pairToken === NATIVE_PAIR_TOKEN`. */
 export const NATIVE_PAIR_TOKEN: Address = ZERO_ADDRESS;
 
+/**
+ * Snipe-tax exemption limits, both verified first-hand by simulation
+ * (`pnpm probe:exemptions`).
+ *
+ * The factory ceiling is 32, but only 31 may be DECLARED through
+ * `PonsV2LaunchAndBuy.launchAndBuy`, because the router appends `recipient` to the
+ * list itself. Measured boundary: 31 declared succeeds, 32 reverts.
+ *
+ * This must be enforced client-side. The contract checks it only after the launch
+ * fee has been committed, so a creator who supplies one address too many loses the
+ * fee to a revert.
+ */
+export const MAX_DECLARABLE_SNIPE_EXEMPTIONS = 31;
+
+/** The factory's own ceiling, including the recipient the router appends. */
+export const MAX_SNIPE_EXEMPTIONS_ON_CHAIN = 32;
+
 export interface ChainContracts {
   readonly chainId: number;
   /** PonsV2LaunchFactory — the single configured entry point. */

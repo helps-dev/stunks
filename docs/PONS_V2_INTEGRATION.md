@@ -367,9 +367,10 @@ Rules, verified:
 - `msg.value` is checked with `!=`, not `<`:
   `nativeQuote ? launchFee + quoteIn : launchFee`. One wei over or under reverts
   `NativeValueMismatch` (`0xbc760cfe`).
-- Declarable exemptions: **31**, because the router appends `recipient` and the
-  factory ceiling is 32. No public getter exposes the router's limit, so validate
-  by simulation and cap the UI at 31.
+- Declarable exemptions: **31**, verified by simulation rather than assumed. The
+  router appends `recipient` against a factory ceiling of 32. Measured boundary:
+  31 declared succeeds, 32 reverts. Re-check with `pnpm probe:exemptions`; the
+  constant lives in `@stunks/config` as `MAX_DECLARABLE_SNIPE_EXEMPTIONS`.
 - Because the curve is CREATE2-derived from a caller-chosen salt, simulating this
   call yields the curve address **before anything is broadcast**. That is what makes
   a prepared bundle possible (`WHITELIST_LAUNCH.md`).

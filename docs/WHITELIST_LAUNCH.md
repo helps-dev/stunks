@@ -167,11 +167,10 @@ Two rules that follow, both verified:
   `msg.value == launchFee + quoteIn` for native launches, `launchFee` alone for
   ERC-20 pairs. Off by one wei in either direction reverts with
   `NativeValueMismatch` (`0xbc760cfe`).
-- **Declarable exemptions are 31, not 32.** The router adds `recipient` to the
-  list itself, and the contract ceiling is 32. STUNKS must cap input at 31 and say
-  why. (The 31 figure comes from third-party documentation; the 32 ceiling is
-  confirmed in the factory source, but no public getter exposes the router's own
-  limit, so treat 31 as the safe cap and validate by simulation.)
+- **Declarable exemptions are 31, not 32** — verified by simulating `launchAndBuy`
+  at 0/1/30/31/32/33 declared addresses: 31 succeeds, 32 reverts. The router
+  appends `recipient` itself against a factory ceiling of 32. Re-checkable with
+  `pnpm probe:exemptions`.
 
 ### What still has to race: the other 31 wallets
 
@@ -297,9 +296,10 @@ liability.
   whitelisted buyer who waits gets a worse fill. STUNKS should submit the bundle
   as fast as possible and show the achieved price, not a promised one.
 - **32 is the contract ceiling and 31 is what you may declare** through the
-  router, which adds `recipient` itself. STUNKS must cap input at 31 and explain
-  why, rather than letting the transaction revert with `ExemptionListTooLong`
-  after the launch fee is committed.
+  router, which appends `recipient` itself. **Verified first-hand by simulation**
+  (`pnpm probe:exemptions`): 31 declared addresses is accepted, 32 reverts. STUNKS
+  caps input at 31 and explains why, rather than letting the transaction revert
+  after the launch fee is already committed.
 - **Broadcasting a buy before the launch receipt loses the money.** A `buy` to an
   address with no code does not revert; the ETH is stranded at the curve's future
   address. This must be structurally impossible in the code, not merely avoided.

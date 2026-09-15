@@ -327,7 +327,7 @@ manipulation, and moderation states from day one.
 | --- | --- | --- | --- |
 | U8 | Real bundle latency for STUNKS' own path: launch receipt → buy inclusion | whether Protected Launch delivers its advantage | small-value mainnet test launch with a real whitelist |
 | U10 | Where the collected snipe tax goes (protocol / creator / buyback / reserve) | fee analytics and honest mechanism copy | verified source, or trace a taxed buy's value flow |
-| U11 | The router's own declarable-exemption limit (31 assumed, no public getter) | input validation before the launch fee is spent | simulate `launchAndBuy` with 31 and 32 entries |
+| U12 | Exact composition of deductions once they exceed 100% (age 0 of a launch) | nothing — quotes there come from simulation | verified source, or a controlled fresh launch |
 
 **Resolved since first draft**
 
@@ -335,7 +335,25 @@ manipulation, and moderation states from day one.
 | --- | --- | --- |
 | U1 | Exact snipe-tax decay function | `startBps >> floor(elapsed*14/seconds)`, matching independent measurements; and `currentSnipeTaxBps(address)` exists on-chain, so it is read rather than computed |
 | U9 | Approved pair-token list | `pairTokenEconomics(address)` and `approvedPairTokens(address)` verified present; five pairs re-read and matched exactly. USDG is 6 decimals |
+| U11 | The router's declarable-exemption limit | **31, verified first-hand.** `pnpm probe:exemptions` simulates `launchAndBuy` at 0/1/30/31/32/33 declared addresses: 31 succeeds, 32 reverts. Encoded as `MAX_DECLARABLE_SNIPE_EXEMPTIONS` with tests |
 | — | "Launch and buy cannot be atomic" | **Wrong.** `PonsV2LaunchAndBuy.launchAndBuy` (`0xf85f8e41`) is public and in active use; the creator's own buy is atomic and unfront-runnable |
+
+---
+
+## R20 — H — The whitelist cap is enforced only after the launch fee is taken
+
+Verified by simulation: the router accepts 31 declared exemptions and reverts at 32.
+The revert happens inside the launch call, which means the launch fee
+(0.0005 ETH at audit time) has already been committed.
+
+**Impact:** a creator who supplies one address too many loses the fee and has to
+start over, with nothing to show for it.
+
+**Mitigation:** `validateSnipeExemptions` in `@stunks/pons` enforces the cap
+client-side before signing, and its error message states both the limit and why
+exceeding it costs money. It also frees slots taken by the auto-exempt deployer and
+by duplicates, so the user is not pushed over the cap by entries that were never
+needed. Covered by tests.
 | U2 | Uniswap V4 quoter/router availability on 4663 | graduated-token trading (Phase 5) | probe V4 periphery addresses; replay a real swap |
 | U3 | Envio HyperSync coverage for 4663 | indexer backfill (Phase 3) | probe the HyperSync endpoint |
 | U4 | Fee escrow event signatures | creator earnings (Phase 7) | verified ABI or topic matching on escrow logs |
