@@ -20,8 +20,8 @@ body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
   font-size: 15px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
@@ -158,4 +158,188 @@ td.source {
   td.value {
     font-size: 12px;
   }
+}
+
+/* ── navigation ─────────────────────────────────────────────────────────── */
+
+.topnav {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.topnav a {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.topnav a:hover {
+  color: var(--text);
+}
+
+.topnav .brand {
+  color: var(--text);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-right: auto;
+}
+
+/* ── forms ──────────────────────────────────────────────────────────────── */
+
+.stack > * + * {
+  margin-top: 20px;
+}
+
+.panel.pad {
+  padding: 20px;
+}
+
+.panel.inner {
+  background: var(--bg);
+  margin: 12px 0;
+}
+
+.panel.pad h2 {
+  margin-top: 0;
+}
+
+.field {
+  display: block;
+  margin-bottom: 16px;
+}
+
+.field > span {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.field input,
+.field textarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 10px 12px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.field input:focus,
+.field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.field textarea {
+  font-family: var(--mono);
+  font-size: 13px;
+  resize: vertical;
+}
+
+.field small {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+/* ── buttons ────────────────────────────────────────────────────────────── */
+
+.btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #04121f;
+  font-weight: 600;
+}
+
+.btn-quiet {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+/* ── wallet ─────────────────────────────────────────────────────────────── */
+
+.wallet > * + * {
+  margin-top: 10px;
+}
+
+.wallet-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  margin: 0;
+  max-width: 70ch;
+}
+
+.error-text {
+  color: var(--warn);
+}
+
+/* ── disclosures: deliberately plain, not decorative ────────────────────── */
+
+.disclosures {
+  margin: 14px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.disclosures li + li {
+  margin-top: 6px;
+}
+
+table.compact th,
+table.compact td {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+.txstatus {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.txstatus > * + * {
+  margin-top: 8px;
 }
