@@ -16,6 +16,21 @@
 // 3. INDEXING IS IDEMPOTENT. Every event-derived row carries
 //    (chainId, transactionHash, logIndex) with a unique constraint, so a restart,
 //    a replay or an overlapping scan window cannot double-count a trade.
+//
+// NAMING CONVENTION — read before writing raw SQL.
+//
+//   Tables are snake_case and plural, via @@map: `tokens`, `trades`, `holders`.
+//   Columns keep Prisma's camelCase: `tokenAmount`, `chainId`, `blockNumber`.
+//
+// This is deliberate. Prisma is the only writer and it quotes identifiers, so the
+// mixed convention costs nothing through the client. It does mean ad-hoc SQL must
+// double-quote column names:
+//
+//   SELECT "tokenAmount" FROM trades WHERE "chainId" = 4663;   -- correct
+//   SELECT token_amount   FROM trades;                          -- column does not exist
+//
+// Renaming ~150 columns with @map was judged not worth the churn while the schema
+// has a single consumer. Revisit if BI tooling or hand-written SQL becomes common.
 
 generator client {
   provider = "prisma-client-js"
@@ -27,7 +42,11 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+  // Pooled connection for the application. On Neon this is the "-pooler" host.
   url      = env("DATABASE_URL")
+  // Direct connection for migrations. DDL through a connection pooler is
+  // unreliable, so Prisma is pointed at the unpooled host for schema changes.
+  directUrl = env("DIRECT_URL")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
