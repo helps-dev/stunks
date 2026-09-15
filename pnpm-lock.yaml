@@ -87,6 +87,9 @@ importers:
       '@stunks/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@stunks/database':
+        specifier: workspace:*
+        version: link:../../packages/database
       '@stunks/pons':
         specifier: workspace:*
         version: link:../../packages/pons

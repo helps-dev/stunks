@@ -18,6 +18,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <a href="/" className="brand">
               STUNKS.FUN
             </a>
+            <a href="/explore">Explore</a>
             <a href="/launch">Launch</a>
           </nav>
           {children}

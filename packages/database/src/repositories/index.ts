@@ -2,10 +2,12 @@ import type { PrismaClient } from "@prisma/client";
 import { CheckpointRepository } from "./checkpoint.js";
 import { TokenRepository } from "./token.js";
 import { TradeRepository } from "./trade.js";
+import { ExploreRepository } from "./explore.js";
 
 export * from "./checkpoint.js";
 export * from "./token.js";
 export * from "./trade.js";
+export * from "./explore.js";
 
 /**
  * Repository bundle.
@@ -19,6 +21,7 @@ export interface Repositories {
   readonly checkpoints: CheckpointRepository;
   readonly tokens: TokenRepository;
   readonly trades: TradeRepository;
+  readonly explore: ExploreRepository;
 }
 
 export function createRepositories(prisma: PrismaClient): Repositories {
@@ -26,5 +29,6 @@ export function createRepositories(prisma: PrismaClient): Repositories {
     checkpoints: new CheckpointRepository(prisma),
     tokens: new TokenRepository(prisma),
     trades: new TradeRepository(prisma),
+    explore: new ExploreRepository(prisma),
   };
 }

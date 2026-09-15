@@ -5,6 +5,7 @@ const nextConfig = {
   // has to transpile them. This keeps the packages free of a build step.
   transpilePackages: [
     "@stunks/config",
+    "@stunks/database",
     "@stunks/pons",
     "@stunks/types",
     "@stunks/utils",
