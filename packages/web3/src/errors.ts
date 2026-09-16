@@ -18,6 +18,8 @@ export type RpcFailureKind =
   | "BLOCK_UNAVAILABLE"
   /** Provider accepts JSON-RPC but is temporarily unable to serve the query. */
   | "UPSTREAM_UNAVAILABLE"
+  /** Endpoint refuses a JSON-RPC batch this large. Its real limit is plan-dependent. */
+  | "BATCH_TOO_LARGE"
   | "TIMEOUT"
   | "NETWORK"
   | "HTTP_ERROR"
@@ -88,6 +90,10 @@ export function isRetryable(kind: RpcFailureKind): boolean {
     case "NETWORK":
     case "HTTP_ERROR":
       return true;
+    // Another endpoint may allow a batch this size, so it is worth moving on — but
+    // the pool records the rejected size so the same endpoint is not asked again.
+    case "BATCH_TOO_LARGE":
+      return true;
     // A revert or a bad parameter will fail identically everywhere, and a range
     // that is too wide needs the caller to split it, not a different endpoint.
     case "RPC_ERROR":
@@ -118,9 +124,44 @@ const UPSTREAM_UNAVAILABLE_PATTERNS = [
   /\bblock\s+\d+\s+alone returns more logs than the upstream will serve\b/i,
 ];
 
+const BATCH_TOO_LARGE_PATTERNS = [
+  // dRPC's free plan, measured: a batch of 10, 25, 50 or 100 all come back as HTTP 500
+  // with this message on every entry, while a batch of 3 succeeds.
+  /batch of more than \d+ requests? (are|is) not allowed/i,
+  /batch (size|request).{0,20}(not allowed|not supported|too large|exceed)/i,
+];
+
+/**
+ * The allowed batch size an endpoint reported while rejecting a larger one.
+ *
+ * Endpoints in this pool have a track record of misreporting their own limits, so the
+ * number is treated as a hint: the caller still records the size that actually failed.
+ */
+export function parseAllowedBatchSize(message: string): number | null {
+  const match = /batch of more than (\d+) requests?/i.exec(message);
+  if (!match?.[1]) return null;
+  // eslint-disable-next-line no-restricted-syntax -- a batch size is not money
+  const parsed = Number(match[1]);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+/** No endpoint in the pool will serve a JSON-RPC batch of the requested size. */
+export class BatchNotSupportedError extends Error {
+  constructor(
+    readonly requested: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "BatchNotSupportedError";
+  }
+}
+
 export function classifyRpcErrorMessage(message: string): RpcFailureKind {
   if (LOG_RANGE_PATTERNS.some((pattern) => pattern.test(message))) {
     return "LOG_RANGE_TOO_WIDE";
+  }
+  if (BATCH_TOO_LARGE_PATTERNS.some((pattern) => pattern.test(message))) {
+    return "BATCH_TOO_LARGE";
   }
   if (BLOCK_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(message))) {
     return "BLOCK_UNAVAILABLE";

@@ -1,8 +1,10 @@
 import {
   AllEndpointsFailedError,
+  BatchNotSupportedError,
   RpcCallError,
   classifyRpcErrorMessage,
   isRetryable,
+  parseAllowedBatchSize,
 } from "./errors.js";
 
 /**
@@ -45,6 +47,19 @@ export interface RpcPoolOptions {
   readonly sleep?: (ms: number) => Promise<void>;
 }
 
+/** One call inside a JSON-RPC batch. See `RpcPool.requestBatch`. */
+export interface RpcBatchCall {
+  readonly method: string;
+  readonly params?: readonly unknown[];
+}
+
+/** One envelope from a JSON-RPC batch response. */
+interface BatchEntry {
+  id?: number;
+  error?: { code?: number; message?: string };
+  result?: unknown;
+}
+
 export interface EndpointHealth {
   readonly url: string;
   readonly healthy: boolean;
@@ -68,6 +83,14 @@ interface MutableHealth {
   cooldownUntil: number | null;
   lastErrorKind: string | null;
   nextAllowedAt: number;
+  /**
+   * Largest JSON-RPC batch this endpoint has proven it will serve, discovered at
+   * runtime. `null` means nothing has been rejected yet.
+   *
+   * Discovered rather than configured, for the same reason the log window is: these
+   * endpoints misreport their own limits, and the free-plan caps differ per provider.
+   */
+  maxBatchSize: number | null;
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -106,6 +129,7 @@ export class RpcPool {
         cooldownUntil: null,
         lastErrorKind: null,
         nextAllowedAt: 0,
+        maxBatchSize: null,
       };
     });
     this.strategy = options.strategy ?? "ordered";
@@ -203,70 +227,11 @@ export class RpcPool {
     endpoint.totalRequests += 1;
     this.requestId += 1;
 
-    let response: Response;
-    try {
-      response = await this.fetchImpl(endpoint.url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: this.requestId,
-          method,
-          params,
-        }),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      });
-    } catch (error) {
-      const isTimeout =
-        error instanceof Error &&
-        (error.name === "TimeoutError" || error.name === "AbortError");
-      throw new RpcCallError({
-        kind: isTimeout ? "TIMEOUT" : "NETWORK",
-        endpoint: endpoint.url,
-        method,
-        message: error instanceof Error ? error.message : String(error),
-        cause: error,
-      });
-    }
-
-    const bodyText = await response.text();
-
-    // The critical check. A throttled endpoint returns HTML; parsing that as an
-    // answer is how "no code at this address" and "no logs in this range" become
-    // silent lies.
-    let payload: unknown;
-    try {
-      payload = JSON.parse(bodyText);
-    } catch {
-      throw new RpcCallError({
-        kind: response.status === 429 ? "RATE_LIMITED" : "NON_JSON_RESPONSE",
-        endpoint: endpoint.url,
-        method,
-        statusCode: response.status,
-        message: `expected JSON-RPC, got ${response.status} ${
-          response.headers.get("content-type") ?? "unknown content-type"
-        }: ${bodyText.slice(0, 80).replace(/\s+/g, " ")}`,
-      });
-    }
-
-    if (!response.ok) {
-      throw new RpcCallError({
-        kind: response.status === 429 ? "RATE_LIMITED" : "HTTP_ERROR",
-        endpoint: endpoint.url,
-        method,
-        statusCode: response.status,
-        message: `HTTP ${response.status}`,
-      });
-    }
-
-    if (typeof payload !== "object" || payload === null) {
-      throw new RpcCallError({
-        kind: "NON_JSON_RESPONSE",
-        endpoint: endpoint.url,
-        method,
-        message: "JSON-RPC response was not an object",
-      });
-    }
+    const payload = await this.postRpc(
+      endpoint,
+      { jsonrpc: "2.0", id: this.requestId, method, params },
+      method,
+    );
 
     const envelope = payload as {
       error?: { code?: number; message?: string };
@@ -310,6 +275,258 @@ export class RpcPool {
     return envelope.result as T;
   }
 
+  /**
+   * One HTTP POST, with every failure mode this pool has actually met mapped onto an
+   * RpcCallError. Shared by the single and batched paths, because the invariant that
+   * matters most here — a throttled endpoint answers with HTML, and HTML is a
+   * transport failure rather than a chain answer — must not drift between them.
+   */
+  private async postRpc(
+    endpoint: MutableHealth,
+    body: unknown,
+    method: string,
+    /**
+     * Trust a parsed JSON-RPC body over a non-2xx status.
+     *
+     * Only the batch path sets this, because that is where it was measured to matter:
+     * dRPC rejects an oversized batch with HTTP 500 while still returning a complete,
+     * valid array of envelopes carrying the real reason ("batch of more than 3
+     * requests are not allowed on free plan"). Reading the status alone turns a
+     * precise, actionable limit into an opaque HTTP_ERROR. The body still has to
+     * parse as JSON first, so a throttled endpoint's HTML page is unaffected.
+     */
+    preferBodyError = false,
+  ): Promise<unknown> {
+    let response: Response;
+    try {
+      response = await this.fetchImpl(endpoint.url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+    } catch (error) {
+      const isTimeout =
+        error instanceof Error &&
+        (error.name === "TimeoutError" || error.name === "AbortError");
+      throw new RpcCallError({
+        kind: isTimeout ? "TIMEOUT" : "NETWORK",
+        endpoint: endpoint.url,
+        method,
+        message: error instanceof Error ? error.message : String(error),
+        cause: error,
+      });
+    }
+
+    const bodyText = await response.text();
+
+    // The critical check. A throttled endpoint returns HTML; parsing that as an
+    // answer is how "no code at this address" and "no logs in this range" become
+    // silent lies.
+    let payload: unknown;
+    try {
+      payload = JSON.parse(bodyText);
+    } catch {
+      throw new RpcCallError({
+        kind: response.status === 429 ? "RATE_LIMITED" : "NON_JSON_RESPONSE",
+        endpoint: endpoint.url,
+        method,
+        statusCode: response.status,
+        message: `expected JSON-RPC, got ${response.status} ${
+          response.headers.get("content-type") ?? "unknown content-type"
+        }: ${bodyText.slice(0, 80).replace(/\s+/g, " ")}`,
+      });
+    }
+
+    const bodyCarriesError =
+      preferBodyError &&
+      Array.isArray(payload) &&
+      payload.some((entry) => (entry as BatchEntry | null)?.error !== undefined);
+
+    if (!response.ok && !bodyCarriesError) {
+      throw new RpcCallError({
+        kind: response.status === 429 ? "RATE_LIMITED" : "HTTP_ERROR",
+        endpoint: endpoint.url,
+        method,
+        statusCode: response.status,
+        message: `HTTP ${response.status}`,
+      });
+    }
+
+    if (typeof payload !== "object" || payload === null) {
+      throw new RpcCallError({
+        kind: "NON_JSON_RESPONSE",
+        endpoint: endpoint.url,
+        method,
+        message: "JSON-RPC response was not an object",
+      });
+    }
+
+    return payload;
+  }
+
+  /**
+   * Many calls in a single HTTP POST, with the same failover as `request`.
+   *
+   * This exists for one measured problem: the indexer needs a timestamp for every
+   * block a trade appears in, `eth_getBlockByNumber` is not something multicall can
+   * batch, and the curve stream's window reaches thousands of blocks. Issued one per
+   * block, that is thousands of requests against endpoints that serve a few per
+   * second, and it was observed saturating the pool until the stream stopped
+   * advancing entirely. Batched, the same work is a handful of POSTs.
+   *
+   * Batch support was confirmed against both endpoints before this was written:
+   * three eth_getBlockByNumber calls in one POST returned three responses.
+   *
+   * A batch succeeds or fails as a unit. Per-item recovery would mean deciding which
+   * half of a window was written, and a whole-batch retry on another endpoint is both
+   * simpler and cheap, since these are confirmed blocks that any healthy archive node
+   * can serve.
+   */
+  async requestBatch<T>(calls: readonly RpcBatchCall[]): Promise<readonly T[]> {
+    if (calls.length === 0) return [];
+
+    const label = `${calls[0]?.method ?? "batch"} (batch of ${calls.length})`;
+    const failures: RpcCallError[] = [];
+
+    const capable = this.selectOrder().filter(
+      (endpoint) => endpoint.maxBatchSize === null || endpoint.maxBatchSize >= calls.length,
+    );
+    if (capable.length === 0) {
+      throw new BatchNotSupportedError(
+        calls.length,
+        `No endpoint will serve a batch of ${calls.length}: ` +
+          this.endpoints
+            .map((endpoint) => `${endpoint.url} allows ${endpoint.maxBatchSize ?? "?"}`)
+            .join(", "),
+      );
+    }
+
+    for (const endpoint of capable) {
+      for (let attempt = 0; attempt < this.attemptsPerEndpoint; attempt++) {
+        try {
+          return await this.callEndpointBatch<T>(endpoint, calls, label);
+        } catch (error) {
+          const failure =
+            error instanceof RpcCallError
+              ? error
+              : new RpcCallError({
+                  kind: "NETWORK",
+                  endpoint: endpoint.url,
+                  method: label,
+                  message: error instanceof Error ? error.message : String(error),
+                  cause: error,
+                });
+          failures.push(failure);
+          this.recordFailure(endpoint, failure);
+
+          if (!isRetryable(failure.kind)) throw failure;
+
+          // A plan limit will reject the same size every time, so remember it and move
+          // on instead of spending the remaining attempts learning it again.
+          if (failure.kind === "BATCH_TOO_LARGE") {
+            const allowed = parseAllowedBatchSize(failure.message);
+            endpoint.maxBatchSize = Math.min(allowed ?? calls.length - 1, calls.length - 1);
+            break;
+          }
+
+          const isLastAttempt = attempt === this.attemptsPerEndpoint - 1;
+          if (!isLastAttempt) {
+            await this.sleep(this.backoffBaseMs * 2 ** attempt);
+          }
+        }
+      }
+    }
+
+    throw new AllEndpointsFailedError(label, failures);
+  }
+
+  private async callEndpointBatch<T>(
+    endpoint: MutableHealth,
+    calls: readonly RpcBatchCall[],
+    label: string,
+  ): Promise<readonly T[]> {
+    await this.respectPacing(endpoint);
+
+    const startedAt = this.now();
+    endpoint.totalRequests += 1;
+    const baseId = this.requestId + 1;
+    this.requestId += calls.length;
+
+    const payload = await this.postRpc(
+      endpoint,
+      calls.map((call, index) => ({
+        jsonrpc: "2.0",
+        id: baseId + index,
+        method: call.method,
+        params: call.params ?? [],
+      })),
+      label,
+      true,
+    );
+
+    if (!Array.isArray(payload)) {
+      // An endpoint that does not implement batching answers with a single envelope,
+      // which would otherwise be silently read as the first call's result.
+      throw new RpcCallError({
+        kind: "NON_JSON_RESPONSE",
+        endpoint: endpoint.url,
+        method: label,
+        message: "expected a JSON-RPC batch array",
+      });
+    }
+
+    // The spec allows a server to answer a batch in any order, so results are matched
+    // by id rather than by position.
+    const byId = new Map<number, BatchEntry>();
+    for (const entry of payload as BatchEntry[]) {
+      if (typeof entry.id === "number") byId.set(entry.id, entry);
+    }
+
+    const results: T[] = [];
+    for (let index = 0; index < calls.length; index++) {
+      const call = calls[index]!;
+      const entry = byId.get(baseId + index);
+      if (entry === undefined) {
+        throw new RpcCallError({
+          kind: "NON_JSON_RESPONSE",
+          endpoint: endpoint.url,
+          method: label,
+          message: `batch response missing id ${baseId + index} for ${call.method}`,
+        });
+      }
+      if (entry.error) {
+        const message = entry.error.message ?? "unknown RPC error";
+        throw new RpcCallError({
+          kind: classifyRpcErrorMessage(message),
+          endpoint: endpoint.url,
+          method: call.method,
+          message,
+          ...(entry.error.code !== undefined ? { rpcCode: entry.error.code } : {}),
+        });
+      }
+      // Same reasoning as the single-call path: a null block is a lagging endpoint
+      // reporting a gap through a JSON-RPC success, so it has to fail over.
+      if (
+        entry.result === null &&
+        (call.method === "eth_getBlockByNumber" || call.method === "eth_getBlockByHash")
+      ) {
+        throw new RpcCallError({
+          kind: "BLOCK_UNAVAILABLE",
+          endpoint: endpoint.url,
+          method: call.method,
+          message: `endpoint returned no block for ${JSON.stringify(
+            call.params?.[0] ?? null,
+          )}`,
+        });
+      }
+      results.push(entry.result as T);
+    }
+
+    this.recordSuccess(endpoint, this.now() - startedAt);
+    return results;
+  }
+
   private async respectPacing(endpoint: MutableHealth): Promise<void> {
     if (endpoint.minIntervalMs <= 0) return;
     const wait = endpoint.nextAllowedAt - this.now();
@@ -334,8 +551,9 @@ export class RpcPool {
     endpoint.totalFailures += 1;
     endpoint.lastErrorKind = failure.kind;
     // A too-wide log range is the caller's problem, not the endpoint's. Counting
-    // it against health would demote a perfectly good archive node.
-    if (failure.kind === "LOG_RANGE_TOO_WIDE") return;
+    // it against health would demote a perfectly good archive node. A batch-size
+    // rejection is a billing plan, not ill health, and the same applies.
+    if (failure.kind === "LOG_RANGE_TOO_WIDE" || failure.kind === "BATCH_TOO_LARGE") return;
     endpoint.consecutiveFailures += 1;
     if (endpoint.consecutiveFailures >= this.failureThreshold) {
       endpoint.cooldownUntil = this.now() + this.cooldownMs;

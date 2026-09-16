@@ -1,4 +1,5 @@
 import type { Address, Hex, PublicClient } from "viem";
+import { numberToHex } from "viem";
 import { createIndexerClient } from "@stunks/web3";
 import { CURVE_TOPICS, FACTORY_TOPICS } from "@stunks/pons";
 import { createRepositories, getPrisma, waitForDatabase } from "@stunks/database";
@@ -68,8 +69,22 @@ async function main(): Promise<void> {
 
   const rpcSource = new RpcLogSource(client as PublicClient, config.LOG_WINDOW);
   // Multicall batches the contract reads; this removes the per-log block lookups
-  // that multicall cannot help with.
-  const blockTimes = new BlockTimeCache(client as PublicClient);
+  // that multicall cannot help with. `eth_getBlockByNumber` is not a contract call, so
+  // it goes through the pool's JSON-RPC batching instead — one POST per 100 blocks
+  // rather than one per block, which is what stopped the wide-window bursts from
+  // saturating the endpoints.
+  const blockTimes = new BlockTimeCache(client as PublicClient, {
+    log,
+    readBatch: async (blockNumbers) => {
+      const blocks = await pool.requestBatch<{ timestamp: Hex }>(
+        blockNumbers.map((blockNumber) => ({
+          method: "eth_getBlockByNumber",
+          params: [numberToHex(blockNumber), false],
+        })),
+      );
+      return blocks.map((block) => BigInt(block.timestamp));
+    },
+  });
 
   const backfillSource: LogSource =
     config.BACKFILL_SOURCE === "hypersync"
