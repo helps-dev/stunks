@@ -1,13 +1,46 @@
-import { describe, expect, it } from "vitest";
-import type { Address } from "viem";
+import { describe, expect, it, vi } from "vitest";
+import type { Address, PublicClient } from "viem";
 import { NATIVE_PAIR_TOKEN } from "@stunks/config";
-import { launchValue, validateLaunchInput, type BuildLaunchInput } from "./builder.js";
+import {
+  buildLaunchTransaction,
+  launchValue,
+  validateLaunchInput,
+  type BuildLaunchInput,
+} from "./builder.js";
 import { classifyTxError, isTerminal, mayHaveSpent } from "./tx-state.js";
 
 const CREATOR = "0x7d3a7e460425f0b407174608670889377c41e9bc" as Address;
 const USDG = "0x5fc5360d0400a0fd4f2af552add042d716f1d168" as Address;
+const ROUTER = "0xe33E9E479dF8802cb0866d5d05258bEc4cF62948" as Address;
+const FACTORY = "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e" as Address;
 const LAUNCH_FEE = 500_000_000_000_000n; // 0.0005 ETH, live value
 const MAX_CREATOR_TAX = 1_000n; // 10%, live ceiling
+
+function mockBuilderClient(pairApproved: boolean): PublicClient {
+  const readContract = vi.fn(({ functionName }: { functionName: string }) => {
+    switch (functionName) {
+      case "launchFee":
+        return LAUNCH_FEE;
+      case "launchEnabled":
+        return true;
+      case "maxCreatorTaxBps":
+        return MAX_CREATOR_TAX;
+      case "snipeTaxStartBps":
+        return 9_900n;
+      case "snipeTaxSeconds":
+        return 3n;
+      case "owner":
+        return CREATOR;
+      case "approvedPairTokens":
+        return pairApproved;
+      case "previewLaunchEconomics":
+        return "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+      default:
+        throw new Error(`Unexpected factory read: ${functionName}`);
+    }
+  });
+  return { readContract } as unknown as PublicClient;
+}
 
 function input(overrides: Partial<BuildLaunchInput> = {}): BuildLaunchInput {
   return {
@@ -117,6 +150,43 @@ describe("launch input validation", () => {
       MAX_CREATOR_TAX,
     );
     expect(errors[0]).toMatch(/no opening buy/i);
+  });
+});
+
+describe("factory pair-asset guard", () => {
+  it("treats native ETH as the verified zero-address special case", async () => {
+    const client = mockBuilderClient(false);
+
+    const result = await buildLaunchTransaction(client, FACTORY, ROUTER, input());
+
+    expect(result.ok).toBe(true);
+    const reads = (client.readContract as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(reads.some(([request]) => request.functionName === "approvedPairTokens")).toBe(false);
+  });
+
+  it("refuses a pair token that is no longer approved before previewing economics", async () => {
+    const client = mockBuilderClient(false);
+
+    const result = await buildLaunchTransaction(client, FACTORY, ROUTER, input({ pairToken: USDG }));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.join(" ")).toMatch(/not currently approved/i);
+    }
+    const reads = (client.readContract as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(reads.some(([request]) => request.functionName === "previewLaunchEconomics")).toBe(false);
+  });
+
+  it("uses the live economics preview only after pair approval succeeds", async () => {
+    const client = mockBuilderClient(true);
+
+    const result = await buildLaunchTransaction(client, FACTORY, ROUTER, input({ pairToken: USDG }));
+
+    expect(result.ok).toBe(true);
+    const reads = (client.readContract as unknown as ReturnType<typeof vi.fn>).mock.calls;
+    expect(reads.some(([request]) => request.functionName === "approvedPairTokens")).toBe(true);
+    expect(reads.some(([request]) => request.functionName === "previewLaunchEconomics")).toBe(true);
+    if (result.ok) expect(result.launch.value).toBe(LAUNCH_FEE);
   });
 });
 

@@ -168,6 +168,23 @@ export async function platformStats() {
   };
 }
 
+export interface LaunchPairCandidate {
+  readonly address: string;
+  readonly decimals: number;
+  readonly launchCount: number;
+}
+
+/**
+ * Historical discovery candidates for the launch pair selector.
+ *
+ * These are intentionally not labelled "approved" here. The launch route verifies
+ * current factory approval and ERC-20 metadata from chain before passing anything to
+ * the client form.
+ */
+export async function launchPairCandidates(): Promise<readonly LaunchPairCandidate[]> {
+  return repos.explore.listSeenPairTokens(ROBINHOOD_CHAIN_ID);
+}
+
 export async function tokenDetail(address: string) {
   return repos.explore.getToken(ROBINHOOD_CHAIN_ID, address);
 }

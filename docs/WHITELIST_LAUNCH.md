@@ -307,6 +307,21 @@ liability.
   decimals. Never assume 18. Read `pairTokenEconomics(pairToken)` for that pair's
   own `phantomQuote` and `graduationThreshold`; five pairs have non-round
   full-precision values that cannot be derived from a ratio.
+- **Native ETH is a special pair, not an ERC-20 approval-mapping member.** It is
+  represented by `address(0)` and native launches are verified by the exact-value
+  path. On-chain `approvedPairTokens(address(0))` reads false, so using that mapping
+  to validate ETH would incorrectly remove the supported native option.
+- **A selectable ERC-20 is not merely a historical pair.** The UI may discover
+  candidates from past indexed launches, but it must read `approvedPairTokens(pair)`
+  and current ERC-20 metadata/economics from chain immediately before offering and
+  again before signing. Historical decimals must never be used to parse a new amount.
+- **Protected buy requests are native-ETH only for now.** Each row is a separate
+  connected-wallet transaction requested only after the launch receipt and verified
+  curve code. The sends are sequential and non-atomic; they cannot promise every row
+  lands inside the short protection window. An ERC-20 launch can use an exact router
+  approval for a developer buy, but its curve does not exist until after the receipt.
+  The required exact curve allowance for recipient bundles therefore cannot be safely
+  pre-approved.
 - **The whitelist is immutable after launch.** It is written during
   `launchToken`. There is no add-later path. The UI must make this unmistakable
   before signing.
@@ -359,7 +374,10 @@ Still to verify before shipping:
    measured samples.
 2. Real bundle latency end to end: launch receipt → buy inclusion, measured on
    mainnet with a small-value test launch.
-3. The approved pair-token list, before offering stock-paired launches.
+3. There is no factory pair-token enumeration. The launch selector may use past
+   launches only as discovery candidates, then must re-check current factory approval,
+   economics and ERC-20 decimals before signing. Native ETH is the supported
+   zero-address special case and is not an `approvedPairTokens` mapping member.
 4. Whether the whitelisted recipient needs to already exist / hold ETH. It should
    not, since it only receives tokens, but this must be confirmed with a real
    fresh address.

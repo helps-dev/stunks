@@ -11,6 +11,7 @@ import { ponsV2LaunchAndBuyAbi } from "../abi/hook.js";
 import {
   previewLaunchEconomics,
   readFactoryParameters,
+  readPairTokenApproved,
   isNativeQuote,
 } from "../client/reads.js";
 import { validateSnipeExemptions } from "./exemptions.js";
@@ -166,6 +167,22 @@ export async function buildLaunchTransaction(
   input: BuildLaunchInput,
 ): Promise<BuildLaunchResult> {
   const params = await readFactoryParameters(client, factory);
+
+  // Native ETH is Pons's zero-address special case. It is not represented by the
+  // ERC-20 approval mapping (the mapping reads false on-chain), while every non-native
+  // candidate must pass the live membership check immediately before signing.
+  if (!isNativeQuote(input.pairToken)) {
+    const pairApproved = await readPairTokenApproved(client, factory, input.pairToken);
+    if (!pairApproved) {
+      return {
+        ok: false,
+        errors: [
+          "The selected pair asset is not currently approved by the Pons factory. " +
+            "Choose a verified pair and try again.",
+        ],
+      };
+    }
+  }
 
   if (!params.launchEnabled) {
     return {

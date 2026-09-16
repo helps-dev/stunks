@@ -209,6 +209,30 @@ describe("planBundle — totals and warnings", () => {
     expect(result.plan.totalIn).toBe(4n * TENTH_ETH);
   });
 
+  it("preserves a different amount for every recipient", () => {
+    const list = [
+      { address: wallet(1), amountIn: 10_000_000_000_000_000n },
+      { address: wallet(2), amountIn: 25_000_000_000_000_000n },
+      { address: wallet(3), amountIn: 5_000_000_000_000_000n },
+    ];
+    const result = planBundle(args(list));
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.plan.totalIn).toBe(40_000_000_000_000_000n);
+    expect(result.plan.buys.map((buy) => buy.amountIn)).toEqual(list.map((row) => row.amountIn));
+
+    const transactions = buildBundleTransactions(result.plan, {
+      curve: CURVE,
+      pairToken: NATIVE,
+      launchTxHash: LAUNCH_TX,
+      curveHasCode: true,
+    });
+    expect(transactions.transactions.map((transaction) => transaction.value)).toEqual(
+      list.map((row) => row.amountIn),
+    );
+  });
+
   it("shows a decreasing expected out across the bundle, because price rises", () => {
     const result = planBundle(args(recipients(4)));
     expect(result.ok).toBe(true);

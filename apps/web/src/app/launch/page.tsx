@@ -1,20 +1,30 @@
-import { getChainContracts, KNOWN_RPC_ENDPOINTS, ROBINHOOD_CHAIN_ID } from "@stunks/config";
+import {
+  getChainContracts,
+  KNOWN_RPC_ENDPOINTS,
+  ROBINHOOD_CHAIN_ID,
+} from "@stunks/config";
 import { createReadClient } from "@stunks/web3";
 import {
+  erc20Abi,
+  NATIVE_PAIR_TOKEN,
   readFactoryParameters,
   readLaunchConfigs,
+  readPairTokenApproved,
+  readPairTokenEconomics,
   resolvePonsAddresses,
 } from "@stunks/pons";
+import { isAddress, type Address, type PublicClient } from "viem";
 import { ConnectWallet } from "@/components/wallet";
+import { launchPairCandidates } from "@/lib/queries";
 import { LaunchForm } from "./launch-form";
+import type { LaunchPairAsset } from "./pair-assets";
 
 /**
  * Launch page.
  *
- * Every parameter the form needs is read from the chain on each request, never cached
- * as a constant. `launchFee`, `maxCreatorTaxBps`, `snipeTaxStartBps` and
- * `snipeTaxSeconds` are all owner-mutable, and a stale launch fee produces a
- * guaranteed revert because Pons compares `msg.value` with `!=` rather than `<`.
+ * Mutable launch terms and selectable pair assets are read from chain each request.
+ * Historical launches only discover candidates; `approvedPairTokens()` plus current
+ * ERC-20 metadata/economics decide whether an asset is actually offered in the form.
  */
 
 export const dynamic = "force-dynamic";
@@ -31,12 +41,98 @@ function endpoints(): string[] {
   return [KNOWN_RPC_ENDPOINTS.drpc, KNOWN_RPC_ENDPOINTS.ordofi];
 }
 
+function isPairAsset(value: LaunchPairAsset | null): value is LaunchPairAsset {
+  return value !== null;
+}
+
+/**
+ * Pair approval is a mapping, not an enumerable factory list. Candidate addresses come
+ * from already indexed real launches, then every candidate is independently checked
+ * against the live factory before it reaches the user.
+ */
+async function resolveVerifiedPairAssets(
+  client: PublicClient,
+  factory: Address,
+): Promise<readonly LaunchPairAsset[]> {
+  const historical = await launchPairCandidates();
+  const candidates = new Map<string, { address: Address; historicalLaunchCount: number }>();
+
+  candidates.set(NATIVE_PAIR_TOKEN.toLowerCase(), {
+    address: NATIVE_PAIR_TOKEN,
+    historicalLaunchCount: 0,
+  });
+
+  for (const candidate of historical) {
+    if (!isAddress(candidate.address)) continue;
+    const address = candidate.address as Address;
+    const key = address.toLowerCase();
+    const existing = candidates.get(key);
+    candidates.set(key, {
+      address,
+      historicalLaunchCount: Math.max(existing?.historicalLaunchCount ?? 0, candidate.launchCount),
+    });
+  }
+
+  const verified = await Promise.all(
+    [...candidates.values()].map(async (candidate): Promise<LaunchPairAsset | null> => {
+      try {
+        if (candidate.address.toLowerCase() === NATIVE_PAIR_TOKEN.toLowerCase()) {
+          // ETH is Pons's zero-address special case. It is not an ERC-20 mapping
+          // member, so approvedPairTokens(0) is false even though native launches are
+          // supported and verified by the exact-value launch path.
+          return {
+            address: candidate.address,
+            symbol: "ETH",
+            name: "Native Ether",
+            decimals: 18,
+            native: true,
+            historicalLaunchCount: candidate.historicalLaunchCount,
+          };
+        }
+
+        const approved = await readPairTokenApproved(client, factory, candidate.address);
+        if (!approved) return null;
+
+        // Read current pair economics too. Approval alone says it is a mapping member;
+        // readable economics confirms the factory can price the asset now.
+        await readPairTokenEconomics(client, factory, candidate.address);
+
+        const [name, symbol, decimals] = await Promise.all([
+          client.readContract({ address: candidate.address, abi: erc20Abi, functionName: "name" }),
+          client.readContract({ address: candidate.address, abi: erc20Abi, functionName: "symbol" }),
+          client.readContract({ address: candidate.address, abi: erc20Abi, functionName: "decimals" }),
+        ]);
+
+        const decimalCount = decimals as number;
+        if (!Number.isInteger(decimalCount) || decimalCount < 0 || decimalCount > 255) {
+          return null;
+        }
+
+        return {
+          address: candidate.address,
+          symbol: symbol as string,
+          name: name as string,
+          decimals: decimalCount,
+          native: false,
+          historicalLaunchCount: candidate.historicalLaunchCount,
+        };
+      } catch {
+        // A historical candidate with unreadable current metadata/economics is not
+        // safe to present. Omitting it is more honest than guessing its decimals/name.
+        return null;
+      }
+    }),
+  );
+
+  return verified.filter(isPairAsset);
+}
+
 export default async function LaunchPage() {
   const { client, assertChain } = createReadClient(endpoints());
   const factory = getChainContracts(ROBINHOOD_CHAIN_ID).ponsV2Factory;
 
   let terms: {
-    router: string;
+    router: Address;
     launchFee: string;
     maxCreatorTaxBps: number;
     snipeTaxStartBps: number;
@@ -44,14 +140,16 @@ export default async function LaunchPage() {
     launchConfigId: string;
     launchEnabled: boolean;
   } | null = null;
+  let pairAssets: readonly LaunchPairAsset[] = [];
   let loadError: string | null = null;
 
   try {
     await assertChain();
-    const [addresses, params, configs] = await Promise.all([
+    const [addresses, params, configs, verifiedPairs] = await Promise.all([
       resolvePonsAddresses(client, factory),
       readFactoryParameters(client, factory),
       readLaunchConfigs(client, factory),
+      resolveVerifiedPairAssets(client, factory),
     ]);
 
     const enabled = configs.find((config) => config.enabled) ?? configs[0];
@@ -69,6 +167,7 @@ export default async function LaunchPage() {
       launchConfigId: enabled.id.toString(),
       launchEnabled: params.launchEnabled,
     };
+    pairAssets = verifiedPairs;
   } catch (error) {
     loadError = error instanceof Error ? error.message : String(error);
   }
@@ -82,9 +181,8 @@ export default async function LaunchPage() {
           <span className="text-brand"> honest edge.</span>
         </h1>
         <p>
-          Set token terms, disclose creator tax, and optionally protect verified recipients
-          from the launch-block anti-snipe tax. STUNKS does not take custody or add a
-          platform fee.
+          Pick a verified pair, set a developer buy, and add protected wallet rows with
+          their own buy amounts. STUNKS does not take custody or add a platform fee.
         </p>
       </section>
 
@@ -96,8 +194,8 @@ export default async function LaunchPage() {
                 <strong>Live launch terms unavailable</strong>
               </p>
               <p className="hint">
-                Launch terms could not be read from the chain, so this form is disabled
-                rather than showing values that might be wrong.
+                Launch terms or verified pair assets could not be read from chain, so this
+                form is disabled rather than showing values that might be wrong.
               </p>
               <p className="hint mono" style={{ marginTop: 10 }}>
                 {loadError}
@@ -116,12 +214,13 @@ export default async function LaunchPage() {
           ) : (
             <LaunchForm
               factory={factory}
-              router={terms.router as `0x${string}`}
+              router={terms.router}
               launchFee={terms.launchFee}
               maxCreatorTaxBps={terms.maxCreatorTaxBps}
               snipeTaxStartBps={terms.snipeTaxStartBps}
               snipeTaxSeconds={terms.snipeTaxSeconds}
               launchConfigId={terms.launchConfigId}
+              pairAssets={pairAssets}
             />
           )}
         </div>
@@ -142,8 +241,8 @@ export default async function LaunchPage() {
             <div className="trust-row">
               <span className="trust-row-icon">✓</span>
               <div>
-                <strong>Exact-value safety</strong>
-                <p>Terms are refreshed from chain before your wallet is asked to sign.</p>
+                <strong>Verified pair candidate</strong>
+                <p>ERC-20 choices are checked live by the factory; ETH follows Pons&apos;s native path.</p>
               </div>
             </div>
             <div className="trust-row">

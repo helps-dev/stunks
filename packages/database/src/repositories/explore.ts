@@ -120,6 +120,13 @@ function orderFor(sort: ExploreSort): Prisma.TokenOrderByWithRelationInput[] {
   }
 }
 
+export interface SeenPairToken {
+  readonly address: string;
+  readonly decimals: number;
+  /** Number of indexed launches that historically used this candidate. */
+  readonly launchCount: number;
+}
+
 export class ExploreRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -307,6 +314,30 @@ export class ExploreRepository {
       totalVolume: sum === null ? 0n : BigInt(sum.toFixed()),
       platformRevenue: 0n,
     };
+  }
+
+  /**
+   * Pair assets observed in real indexed Pons launches.
+   *
+   * This is discovery data, NOT an approval list: Pons exposes membership checks but
+   * no pair-token enumeration. A caller must re-check `approvedPairTokens` on-chain
+   * before offering one as a selectable launch pair.
+   */
+  async listSeenPairTokens(chainId: number, limit = 24): Promise<readonly SeenPairToken[]> {
+    const groups = await this.prisma.token.groupBy({
+      by: ["pairTokenAddress", "pairTokenDecimals"],
+      where: { chainId },
+      _count: { _all: true },
+    });
+
+    return groups
+      .sort((left, right) => right._count._all - left._count._all)
+      .slice(0, limit)
+      .map((group) => ({
+        address: group.pairTokenAddress,
+        decimals: group.pairTokenDecimals,
+        launchCount: group._count._all,
+      }));
   }
 
   /** How far behind the indexer is, so the UI can be honest about staleness. */
