@@ -1,0 +1,26 @@
+# TLS front door for the web app.
+#
+# DOMAIN and ACME_EMAIL come from .env. Caddy requests and renews the certificate
+# itself, so nothing here holds a key.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	# The health endpoint is deliberately absent. It is an internal, unauthenticated
+	# operational view and stays bound to localhost on the VPS.
+	reverse_proxy web:3000
+
+	header {
+		# The app is a wallet dApp: only the user's own wallet signs, and no session
+		# cookie exists to steal. These still cut off the cheap attacks.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}

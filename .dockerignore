@@ -1,0 +1,50 @@
+# Build context exclusions.
+#
+# Without this the context is 1.0 GB, and both Dockerfiles would be actively broken by
+# it: they `COPY packages ./packages` and `COPY apps/<name> ./apps/<name>` after
+# installing dependencies inside the image, so a host `node_modules` in the context
+# lands on top of the Linux install with macOS binaries.
+
+# 729 MB, and platform-specific. Dependencies are installed inside the image.
+node_modules
+**/node_modules
+
+# Build output. Regenerated in the image; .next alone is 247 MB.
+.next
+**/.next
+.turbo
+**/.turbo
+dist
+**/dist
+*.tsbuildinfo
+
+# Generated Prisma client. `prisma generate` runs in the image for its own platform.
+node_modules/.prisma
+**/generated
+
+# Never ship credentials into an image layer. Runtime configuration comes from
+# env_file / secrets, and .env.example stays as the documented template.
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+
+# Promo videos and stills, ~57 MB, none of it referenced by the app. Only
+# logo-transparent.png and banner-stunks.png are imported.
+Asset/Promo
+
+# Local-only working directories.
+semantic-review
+coverage
+*.log
+
+# Docs and editor state do not change the build.
+docs
+*.md
+!README.md
+.vscode
+.idea
+.DS_Store
+**/.DS_Store

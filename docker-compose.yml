@@ -1,0 +1,86 @@
+# STUNKS.FUN on a single VPS.
+#
+#   docker compose up -d --build
+#
+# Both images build from this directory as context, because the indexer and the web app
+# each depend on workspace packages that live above their own folder.
+#
+# The database is NOT here. It is the hosted Postgres named in DATABASE_URL, and the
+# single most important deployment decision is putting this VPS in the same region as
+# that database. Measured from a laptop in Asia against Neon in us-east-2, one
+# round trip is 306 ms, and a curve tick spends about 1.6 s of its 12.2 s purely on the
+# checkpoint write. In-region that same round trip is single-digit milliseconds.
+
+services:
+  indexer:
+    build:
+      context: .
+      dockerfile: apps/indexer/Dockerfile
+    image: stunks-indexer
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HEALTH_PORT: "9464"
+    # Bound to localhost, NOT published. The health endpoint reports checkpoints, RPC
+    # endpoint URLs and failure counts — operational detail with no authentication in
+    # front of it, so it must not be reachable from the internet. Read it over SSH:
+    #   curl http://127.0.0.1:9464/health
+    ports:
+      - "127.0.0.1:9464:9464"
+    # Exactly one replica, ever. Two indexers on the same streams race on checkpoints.
+    # The writes are idempotent so nothing corrupts, but they duplicate every RPC call
+    # and fight over the same ranges for no benefit.
+    deploy:
+      replicas: 1
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      # NEXT_PUBLIC_* is compiled into the browser bundle, so it has to be set here.
+      # Change NEXT_PUBLIC_APP_URL to the real domain before building for production.
+      args:
+        NEXT_PUBLIC_CHAIN_ID: "4663"
+        NEXT_PUBLIC_PONS_V2_FACTORY: "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e"
+        NEXT_PUBLIC_RPC_ENDPOINTS: "https://robinhood.drpc.org,https://rpc.ordofi.network"
+        NEXT_PUBLIC_APP_URL: "http://localhost:3000"
+    image: stunks-web
+    restart: unless-stopped
+    env_file: .env
+    # Published only to localhost as well; caddy terminates TLS and proxies to it. Drop
+    # the 127.0.0.1 prefix only if you intend to serve plain HTTP straight off the VPS,
+    # which would send wallet traffic unencrypted.
+    ports:
+      - "127.0.0.1:3000:3000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # HTTPS front door. Opt in with:  docker compose --profile public up -d
+  # Set DOMAIN and ACME_EMAIL in .env first; Caddy then obtains and renews the
+  # certificate on its own.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["public"]
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+
+volumes:
+  caddy_data:
+  caddy_config:
