@@ -4,7 +4,9 @@
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now stunks-indexer
 #
-# Assumes the repository is at /home/stunks/stunks and owned by the `stunks` user.
+# Assumes the repository is at /home/ubuntu/stunks, which is the default user on the
+# Ubuntu cloud images used by Tencent Lighthouse, AWS and most other providers. Change
+# User, Group and the paths below if yours differs.
 # Adjust the three paths below if you cloned somewhere else.
 
 [Unit]
@@ -15,12 +17,12 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=stunks
-Group=stunks
-WorkingDirectory=/home/stunks/stunks/apps/indexer
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/stunks/apps/indexer
 
 # Credentials come from the file, never from this unit — this file is committed.
-EnvironmentFile=/home/stunks/stunks/.env
+EnvironmentFile=/home/ubuntu/stunks/.env
 # systemd starts services with a nearly empty PATH, so pnpm has to be findable.
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=NODE_ENV=production
@@ -42,7 +44,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/stunks/stunks
+ReadWritePaths=/home/ubuntu/stunks
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true

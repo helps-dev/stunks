@@ -15,11 +15,11 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=stunks
-Group=stunks
-WorkingDirectory=/home/stunks/stunks/apps/web
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/stunks/apps/web
 
-EnvironmentFile=/home/stunks/stunks/.env
+EnvironmentFile=/home/ubuntu/stunks/.env
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=NODE_ENV=production
 Environment=NEXT_TELEMETRY_DISABLED=1
@@ -37,7 +37,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=/home/stunks/stunks
+ReadWritePaths=/home/ubuntu/stunks
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true

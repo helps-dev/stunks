@@ -30,9 +30,37 @@ Find the database region in the connection host. Neon encodes it directly:
 `ep-...-pooler.c-7.us-east-2.aws.neon.tech` is `us-east-2`, so put the VPS in Ohio or in
 `us-east-1` next door. In-region that same round trip is single-digit milliseconds.
 
-If the VPS is already elsewhere and cannot move, the alternatives are to move the
-database instead — Neon can branch into another region — or to accept the backlog and use
-HyperSync for the catch-up. What does not work is a distant VPS with a distant database.
+What does not work is a distant VPS with a distant database.
+
+### Moving the database to the server instead
+
+Often the better direction. A VPS in Singapore is also far closer to this project's likely
+users than Ohio is, so moving the database gives both a fast indexer and a fast site.
+
+Neon offers `aws-ap-southeast-1` (Singapore), but a project's region is fixed when it is
+created — branching does not help, since every branch shares the project region. Moving
+means creating a new project in the target region and copying into it. See
+[Neon: regions](https://neon.com/docs/conceptual-guides/regions) and
+[Neon: changing region](https://neon.com/faqs/change-region-existing-neon-project).
+
+The copy is small. Measured on this database: 314 MB total, 320,834 trades (278 MB),
+19,275 tokens, 14,350 creators.
+
+```bash
+# 1. Create a new Neon project in the target region, then from any machine:
+pg_dump "$OLD_DATABASE_URL" -Fc -f stunks.dump
+pg_restore -d "$NEW_DIRECT_URL" --no-owner --no-acl stunks.dump
+
+# 2. Point .env at the new project, then confirm the indexer agrees with the data
+pnpm verify:db
+pnpm inspect:indexed
+```
+
+Stop the indexer before dumping, or it will keep writing to the old database and those
+trades will be missing from the copy. The checkpoint travels with the data, so the indexer
+resumes exactly where it stopped rather than rescanning.
+
+Content was rephrased for compliance with licensing restrictions.
 
 ## Requirements
 
@@ -42,13 +70,25 @@ HyperSync for the catch-up. What does not work is a distant VPS with a distant d
 
 ## Path A — systemd (recommended)
 
-### 1. A user that is not root
+### 1. Use the image's default user
+
+Ubuntu cloud images already ship a non-root user with sudo — `ubuntu` on Tencent
+Lighthouse, AWS and most others. Use it. The unit files in `deploy/` assume
+`ubuntu` and `/home/ubuntu/stunks`.
 
 ```bash
-sudo adduser --disabled-password --gecos "" stunks
-sudo usermod -aG sudo stunks
-sudo su - stunks
+whoami        # expect ubuntu, not root
+sudo -v       # confirms sudo works
 ```
+
+Creating a dedicated service account adds nothing here: the default user is already
+unprivileged, and the services drop further privileges themselves through
+`ProtectSystem`, `ProtectHome` and `NoNewPrivileges`. If your image logs you in as root
+instead, then create a user — and update `User`, `Group` and the paths in both unit
+files to match.
+
+Note that a browser console (Tencent OrcaTerm, AWS EC2 Connect) already puts you inside
+the VPS. There is no `ssh` step to run from there.
 
 ### 2. Node 22 and pnpm
 
