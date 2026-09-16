@@ -362,11 +362,20 @@ export class Scanner {
     return total;
   }
 
-  /** Follow the head indefinitely. */
+  /**
+   * Follow the head indefinitely.
+   *
+   * The interval may be a function, re-evaluated after every tick. Two streams share
+   * one RPC pool here, and the free endpoints for this chain are the scarce resource:
+   * dRPC answers `RATE_LIMITED` and OrdoFi `UPSTREAM_UNAVAILABLE` once both streams
+   * poll hard. A caller that knows one stream has slack can therefore hand back
+   * budget to the other instead of both spending it evenly.
+   */
   async tail(
-    intervalMs: number,
+    intervalMs: number | (() => number),
     onTick?: (result: ScanTickResult) => void,
   ): Promise<void> {
+    const nextInterval = typeof intervalMs === "function" ? intervalMs : () => intervalMs;
     while (!this.stopping) {
       try {
         const result = await this.tick();
@@ -377,7 +386,7 @@ export class Scanner {
           error: error instanceof Error ? error.message : String(error),
         });
       }
-      await sleep(intervalMs);
+      await sleep(nextInterval());
     }
   }
 

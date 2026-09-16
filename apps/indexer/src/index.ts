@@ -110,8 +110,26 @@ async function main(): Promise<void> {
   log("health endpoint listening", { port: config.HEALTH_PORT, path: "/health" });
 
   const factoryAddresses = async (): Promise<readonly Address[]> => [config.factory];
-  const curveAddresses = async (): Promise<readonly Address[]> =>
-    (await repos.tokens.listActiveCurves(config.CHAIN_ID)) as Address[];
+  /**
+   * The curve stream filters on event signature only, with no address selectors.
+   *
+   * Listing every active curve looked more precise, but it does not scale and it was
+   * measured as the reason the stream stalled. Providers cap a getLogs call at 1,000
+   * address selectors, so 14,123 active curves became 15 requests for every single
+   * tick — and each one retries three times across two endpoints when the free
+   * endpoints throttle, so one tick could cost ~90 calls. The stream went six minutes
+   * without advancing a block while the factory stream kept moving. That cost also
+   * grows with every launch, so it gets worse over time rather than better.
+   *
+   * Dropping the address filter makes it exactly one request per tick, permanently.
+   * It is safe because the address list was never what resolved a log to a token:
+   * `processCurveLogs` maps each log through `findManyByCurves` on the addresses the
+   * logs themselves carry, counts anything unresolved as `unmatched`, and skips it.
+   * The seven topic0 values are Pons curve signatures, so the node still does the
+   * filtering — this widens the filter from "these curves" to "any Pons curve",
+   * which now also covers graduated curves that `listActiveCurves` excluded.
+   */
+  const curveAddresses = async (): Promise<readonly Address[]> => [];
   // Filter at the node, not after downloading every ERC-20 Transfer and unrelated
   // curve event. The maps are constructed from verified ABI selectors, so this cannot
   // omit a Pons event the processors understand.
@@ -161,9 +179,11 @@ async function main(): Promise<void> {
       confirmationDepth: config.CONFIRMATION_DEPTH,
       addresses: curveAddresses,
       topics0: curveTopics,
-      // Without any known curve there is nothing to filter on, and an unfiltered
-      // query would pull every log on the chain.
-      requireAddresses: true,
+      // The guard this replaces existed because an empty address list used to mean an
+      // unfiltered query. It does not: `topics0` is always sent, so the node still
+      // returns only Pons curve events, and the volume stays bounded by the block
+      // window rather than by how many curves exist.
+      requireAddresses: false,
       // Never scan past the factory: a trade needs its token to be indexed first.
       // Nothing else happens here — an earlier version also fast-forwarded the curve
       // checkpoint from inside this callback, which ran on every tick and could ask
@@ -273,9 +293,60 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Both streams draw on one pool of free RPC endpoints, and that pool is the binding
+  // constraint: with each stream polling every TAIL_INTERVAL_MS, dRPC returned
+  // RATE_LIMITED and OrdoFi UPSTREAM_UNAVAILABLE, and the curve stream made no
+  // progress at all for six minutes while the factory — already at the head — kept
+  // spending the budget on ticks that found 0-5 logs.
+  //
+  // The curve stream is capped at the factory checkpoint, so whenever the factory sits
+  // far ahead, the curve stream already has all the runway it can use and the factory
+  // gains nothing by polling hard. Back the factory off in that case and the freed
+  // requests go to the stream that is actually behind. The gap is measured against one
+  // observed curve scan (4,554 blocks), so this threshold leaves roughly ten such
+  // scans of headroom before the factory speeds up again.
+  const FACTORY_SLACK_BLOCKS = 50_000n;
+  const FACTORY_BACKOFF_MULTIPLIER = 10;
+  let factoryBlock = 0n;
+  let curveBlock = 0n;
+  let backedOff = false;
+
+  const factoryInterval = (): number => {
+    const slack = factoryBlock - curveBlock;
+    const shouldBackOff = slack > FACTORY_SLACK_BLOCKS;
+    if (shouldBackOff !== backedOff) {
+      backedOff = shouldBackOff;
+      log(
+        shouldBackOff
+          ? "factory tail backing off so the curve stream gets the RPC budget"
+          : "curve stream caught up; factory tail back to full speed",
+        {
+          factoryBlock: factoryBlock.toString(),
+          curveBlock: curveBlock.toString(),
+          slackBlocks: slack.toString(),
+          intervalMs: shouldBackOff
+            ? config.TAIL_INTERVAL_MS * FACTORY_BACKOFF_MULTIPLIER
+            : config.TAIL_INTERVAL_MS,
+        },
+      );
+    }
+    return shouldBackOff
+      ? config.TAIL_INTERVAL_MS * FACTORY_BACKOFF_MULTIPLIER
+      : config.TAIL_INTERVAL_MS;
+  };
+
   await Promise.all([
-    scanners[0]!.tail(config.TAIL_INTERVAL_MS, (r) => formatTick("factory", r)),
-    scanners[1]!.tail(config.TAIL_INTERVAL_MS, (r) => formatTick("curves", r)),
+    scanners[0]!.tail(factoryInterval, (r) => {
+      // `toBlock` is the checkpoint this tick reached, which is what the curve stream
+      // is capped by. A failed tick reports the retained checkpoint, so the gap stays
+      // truthful when the source is unavailable.
+      factoryBlock = r.toBlock;
+      formatTick("factory", r);
+    }),
+    scanners[1]!.tail(config.TAIL_INTERVAL_MS, (r) => {
+      curveBlock = r.toBlock;
+      formatTick("curves", r);
+    }),
   ]);
 }
 
