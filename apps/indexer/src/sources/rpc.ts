@@ -1,5 +1,5 @@
 import type { Hex, PublicClient } from "viem";
-import { AdaptiveLogWindow, RpcCallError } from "@stunks/web3";
+import { AdaptiveLogWindow, findRpcCallError } from "@stunks/web3";
 import type { Address } from "viem";
 import {
   RangeTooWideError,
@@ -149,11 +149,21 @@ export class RpcLogSource implements LogSource {
         reachedBlock: toBlock,
       };
     } catch (error) {
-      if (error instanceof RpcCallError && error.kind === "LOG_RANGE_TOO_WIDE") {
+      // Unwrapped, because viem wraps whatever the transport throws. Checking
+      // `instanceof` on the caught error alone silently never matched, so the window
+      // grew on every success and never shrank on a rejection.
+      const failure = findRpcCallError(error);
+
+      // A timeout counts as a rejection here. OrdoFi does not refuse an over-wide
+      // range, it accepts the request and then never finishes it: a 2,914-block
+      // topic-only scan aborted on timeout while the same scan over 100 blocks
+      // returned 158 logs immediately. Treating that as merely transient is what let
+      // the window sit above what the endpoint could serve indefinitely.
+      if (failure?.kind === "LOG_RANGE_TOO_WIDE" || failure?.kind === "TIMEOUT") {
         const narrowed = this.window.onRejected();
         throw new RangeTooWideError(
           toBlock - query.fromBlock + 1n,
-          `Endpoint rejected the range; window narrowed to ${narrowed}. Retry.`,
+          `Endpoint rejected the range (${failure.kind}); window narrowed to ${narrowed}. Retry.`,
         );
       }
       throw error;

@@ -2,6 +2,7 @@ import {
   AllEndpointsFailedError,
   BatchNotSupportedError,
   RpcCallError,
+  type RpcFailureKind,
   classifyRpcErrorMessage,
   isRetryable,
   parseAllowedBatchSize,
@@ -95,6 +96,25 @@ interface MutableHealth {
 
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Classify a JSON-RPC error, using the HTTP status only when the message itself says
+ * nothing recognisable.
+ *
+ * The message wins because it is the actionable part: "ranges over 10000 blocks are
+ * not supported" tells the caller to narrow, where the accompanying HTTP 400 does not.
+ * The status is still the fallback so that an unhelpful error delivered with a 429
+ * stays retryable rather than becoming a permanent RPC_ERROR.
+ */
+function classifyWithStatus(
+  message: string,
+  status: number,
+  ok: boolean,
+): RpcFailureKind {
+  const kind = classifyRpcErrorMessage(message);
+  if (ok || kind !== "RPC_ERROR") return kind;
+  return status === 429 ? "RATE_LIMITED" : "HTTP_ERROR";
+}
 
 export class RpcPool {
   private readonly endpoints: MutableHealth[];
@@ -227,7 +247,7 @@ export class RpcPool {
     endpoint.totalRequests += 1;
     this.requestId += 1;
 
-    const payload = await this.postRpc(
+    const { payload, status, ok } = await this.postRpc(
       endpoint,
       { jsonrpc: "2.0", id: this.requestId, method, params },
       method,
@@ -241,11 +261,12 @@ export class RpcPool {
     if (envelope.error) {
       const message = envelope.error.message ?? "unknown RPC error";
       throw new RpcCallError({
-        kind: classifyRpcErrorMessage(message),
+        kind: classifyWithStatus(message, status, ok),
         endpoint: endpoint.url,
         method,
         message,
         ...(envelope.error.code !== undefined ? { rpcCode: envelope.error.code } : {}),
+        ...(ok ? {} : { statusCode: status }),
       });
     }
 
@@ -285,18 +306,7 @@ export class RpcPool {
     endpoint: MutableHealth,
     body: unknown,
     method: string,
-    /**
-     * Trust a parsed JSON-RPC body over a non-2xx status.
-     *
-     * Only the batch path sets this, because that is where it was measured to matter:
-     * dRPC rejects an oversized batch with HTTP 500 while still returning a complete,
-     * valid array of envelopes carrying the real reason ("batch of more than 3
-     * requests are not allowed on free plan"). Reading the status alone turns a
-     * precise, actionable limit into an opaque HTTP_ERROR. The body still has to
-     * parse as JSON first, so a throttled endpoint's HTML page is unaffected.
-     */
-    preferBodyError = false,
-  ): Promise<unknown> {
+  ): Promise<{ payload: unknown; status: number; ok: boolean }> {
     let response: Response;
     try {
       response = await this.fetchImpl(endpoint.url, {
@@ -338,12 +348,29 @@ export class RpcPool {
       });
     }
 
-    const bodyCarriesError =
-      preferBodyError &&
-      Array.isArray(payload) &&
-      payload.some((entry) => (entry as BatchEntry | null)?.error !== undefined);
+    /**
+     * A non-2xx status is NOT allowed to hide the reason the endpoint gave.
+     *
+     * This ordering was a silent, expensive bug. dRPC rejects an over-wide
+     * eth_getLogs with HTTP 400 and a JSON-RPC error that names the problem
+     * ("ranges over 10000 blocks are not supported"), and it rejects an oversized
+     * batch with HTTP 500 and a complete array of envelopes carrying code 31.
+     * Throwing on the status first flattened both into an opaque HTTP_ERROR, which is
+     * retryable but carries no instruction — so AdaptiveLogWindow never once narrowed
+     * across every run of this indexer, the window only ever grew, and both streams
+     * eventually locked onto a range no endpoint would serve and stopped for hours.
+     *
+     * The body still has to parse as JSON to be trusted, so a throttled endpoint's
+     * HTML page is classified exactly as before.
+     */
+    const carriesError =
+      Array.isArray(payload)
+        ? payload.some((entry) => (entry as BatchEntry | null)?.error !== undefined)
+        : typeof payload === "object" &&
+          payload !== null &&
+          (payload as BatchEntry).error !== undefined;
 
-    if (!response.ok && !bodyCarriesError) {
+    if (!response.ok && !carriesError) {
       throw new RpcCallError({
         kind: response.status === 429 ? "RATE_LIMITED" : "HTTP_ERROR",
         endpoint: endpoint.url,
@@ -362,7 +389,7 @@ export class RpcPool {
       });
     }
 
-    return payload;
+    return { payload, status: response.status, ok: response.ok };
   }
 
   /**
@@ -453,7 +480,7 @@ export class RpcPool {
     const baseId = this.requestId + 1;
     this.requestId += calls.length;
 
-    const payload = await this.postRpc(
+    const { payload, status, ok } = await this.postRpc(
       endpoint,
       calls.map((call, index) => ({
         jsonrpc: "2.0",
@@ -462,7 +489,6 @@ export class RpcPool {
         params: call.params ?? [],
       })),
       label,
-      true,
     );
 
     if (!Array.isArray(payload)) {
@@ -498,11 +524,12 @@ export class RpcPool {
       if (entry.error) {
         const message = entry.error.message ?? "unknown RPC error";
         throw new RpcCallError({
-          kind: classifyRpcErrorMessage(message),
+          kind: classifyWithStatus(message, status, ok),
           endpoint: endpoint.url,
           method: call.method,
           message,
           ...(entry.error.code !== undefined ? { rpcCode: entry.error.code } : {}),
+          ...(ok ? {} : { statusCode: status }),
         });
       }
       // Same reasoning as the single-call path: a null block is a lagging endpoint

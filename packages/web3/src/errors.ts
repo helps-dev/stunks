@@ -79,6 +79,46 @@ export class ChainMismatchError extends Error {
   }
 }
 
+/**
+ * Find an RpcCallError anywhere in an error's cause chain.
+ *
+ * Callers reach the pool through viem, and viem wraps whatever a custom transport
+ * throws inside its own error types. A plain `error instanceof RpcCallError` check
+ * therefore misses, which is how the adaptive log window came to never narrow: the
+ * signal to narrow was raised correctly and then never recognised.
+ */
+export function findRpcCallError(error: unknown): RpcCallError | null {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current !== null && current !== undefined && !seen.has(current)) {
+    if (current instanceof RpcCallError) return current;
+    seen.add(current);
+    if (current instanceof AllEndpointsFailedError) {
+      // Every endpoint failed; report the most actionable reason rather than the first.
+      const ranked = [...current.failures].sort(
+        (a, b) => failurePriority(b.kind) - failurePriority(a.kind),
+      );
+      return ranked[0] ?? null;
+    }
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return null;
+}
+
+/** A range rejection tells the caller what to do; a network blip does not. */
+function failurePriority(kind: RpcFailureKind): number {
+  switch (kind) {
+    case "LOG_RANGE_TOO_WIDE":
+      return 3;
+    case "BATCH_TOO_LARGE":
+      return 2;
+    case "TIMEOUT":
+      return 1;
+    default:
+      return 0;
+  }
+}
+
 /** Failures worth trying another endpoint for. */
 export function isRetryable(kind: RpcFailureKind): boolean {
   switch (kind) {

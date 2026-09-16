@@ -67,7 +67,18 @@ async function main(): Promise<void> {
   // mismatch would quietly mix two histories in one database.
   await assertChain();
 
-  const rpcSource = new RpcLogSource(client as PublicClient, config.LOG_WINDOW);
+  /**
+   * One log source per stream, so each discovers its own safe window.
+   *
+   * These two queries are not comparable in size. The factory filters on a single
+   * address and a 2,914-block scan came back as 20 KB. The curve stream filters on
+   * event signature across every curve on the chain, where 500 blocks is already
+   * 566 KB and 2,914 blocks does not return at all. Sharing one AdaptiveLogWindow
+   * meant the factory's cheap successes kept widening the window that the curve
+   * stream then choked on, and a curve rejection kept shrinking the factory's.
+   */
+  const factorySource = new RpcLogSource(client as PublicClient, config.LOG_WINDOW);
+  const curveSource = new RpcLogSource(client as PublicClient, config.LOG_WINDOW);
   // Multicall batches the contract reads; this removes the per-log block lookups
   // that multicall cannot help with. `eth_getBlockByNumber` is not a contract call, so
   // it goes through the pool's JSON-RPC batching instead — one POST per 100 blocks
@@ -86,7 +97,7 @@ async function main(): Promise<void> {
     },
   });
 
-  const backfillSource: LogSource =
+  const hyperSyncSource =
     config.BACKFILL_SOURCE === "hypersync"
       ? new HyperSyncLogSource({
           url: config.HYPERSYNC_URL,
@@ -94,16 +105,19 @@ async function main(): Promise<void> {
           bearerToken: config.HYPERSYNC_BEARER_TOKEN as string,
           rpcClient: client as PublicClient,
         })
-      : rpcSource;
+      : null;
 
-  const head = await rpcSource.head();
+  const factoryLogSource: LogSource = hyperSyncSource ?? factorySource;
+  const curveLogSource: LogSource = hyperSyncSource ?? curveSource;
+
+  const head = await factorySource.head();
   log("indexer starting", {
     chainId: config.CHAIN_ID,
     factory: config.factory,
     startBlock: config.startBlock.toString(),
     head: head.toString(),
     blocksBehind: (head - config.startBlock).toString(),
-    backfillSource: backfillSource.name,
+    backfillSource: factoryLogSource.name,
     confirmationDepth: config.CONFIRMATION_DEPTH,
   });
 
@@ -120,7 +134,7 @@ async function main(): Promise<void> {
     chainId: config.CHAIN_ID,
     repos,
     pool,
-    chainHead: () => rpcSource.head(),
+    chainHead: () => factorySource.head(),
   });
   log("health endpoint listening", { port: config.HEALTH_PORT, path: "/health" });
 
@@ -233,7 +247,10 @@ async function main(): Promise<void> {
       },
     });
 
-  const scanners = [makeFactoryScanner(backfillSource), makeCurveScanner(backfillSource)];
+  const scanners = [
+    makeFactoryScanner(factoryLogSource),
+    makeCurveScanner(curveLogSource),
+  ];
 
   // Skip the stretch of history before any curve existed. A curve cannot emit a trade
   // before it is deployed, so those blocks are provably empty for this stream — and
@@ -324,11 +341,18 @@ async function main(): Promise<void> {
   const FACTORY_BACKOFF_MULTIPLIER = 10;
   let factoryBlock = 0n;
   let curveBlock = 0n;
+  let factoryAtHead = false;
   let backedOff = false;
 
   const factoryInterval = (): number => {
     const slack = factoryBlock - curveBlock;
-    const shouldBackOff = slack > FACTORY_SLACK_BLOCKS;
+    // Only ever slow down a factory stream that is actually at the head. Gating on the
+    // curve gap alone was wrong and it caused a six-hour outage: the gap stays above
+    // any threshold for as long as the curve backlog lasts, so once RPC trouble pushed
+    // the factory off the head it stayed throttled to a tenth of its rate and lost
+    // ground to chain production without bound, ending 212,551 blocks behind. Falling
+    // behind the head now cancels the backoff by itself.
+    const shouldBackOff = factoryAtHead && slack > FACTORY_SLACK_BLOCKS;
     if (shouldBackOff !== backedOff) {
       backedOff = shouldBackOff;
       log(
@@ -339,6 +363,7 @@ async function main(): Promise<void> {
           factoryBlock: factoryBlock.toString(),
           curveBlock: curveBlock.toString(),
           slackBlocks: slack.toString(),
+          factoryAtHead,
           intervalMs: shouldBackOff
             ? config.TAIL_INTERVAL_MS * FACTORY_BACKOFF_MULTIPLIER
             : config.TAIL_INTERVAL_MS,
@@ -356,6 +381,7 @@ async function main(): Promise<void> {
       // is capped by. A failed tick reports the retained checkpoint, so the gap stays
       // truthful when the source is unavailable.
       factoryBlock = r.toBlock;
+      factoryAtHead = r.caughtUp;
       formatTick("factory", r);
     }),
     scanners[1]!.tail(config.TAIL_INTERVAL_MS, (r) => {
