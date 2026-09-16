@@ -25,8 +25,16 @@ COPY packages/pons/package.json packages/pons/
 COPY packages/types/package.json packages/types/
 COPY packages/utils/package.json packages/utils/
 COPY packages/web3/package.json packages/web3/
-# The web app is not needed here and pulling it in would add Next.js to the image.
-RUN pnpm install --frozen-lockfile --filter @stunks/indexer...
+COPY apps/web/package.json apps/web/
+# A full workspace install, not `--filter @stunks/indexer...`.
+#
+# The filtered form looked leaner and was broken: it selects the seven workspace
+# packages and NOT the workspace root, so the root devDependency `prisma` never lands
+# in node_modules and the `pnpm prisma generate` below fails with a missing command.
+# Verified by listing what the filter actually selects. The filter also has to be fed
+# every package.json it might select, so it was not saving much anyway. This costs image
+# size — Next.js comes along for the ride — and buys a build that works.
+RUN pnpm install --frozen-lockfile
 
 # ── runtime ─────────────────────────────────────────────────────────────────
 FROM base AS runner

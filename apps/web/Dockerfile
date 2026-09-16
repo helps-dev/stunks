@@ -28,7 +28,11 @@ COPY packages/pons/package.json packages/pons/
 COPY packages/types/package.json packages/types/
 COPY packages/utils/package.json packages/utils/
 COPY packages/web3/package.json packages/web3/
-RUN pnpm install --frozen-lockfile --filter @stunks/web...
+COPY apps/indexer/package.json apps/indexer/
+# A full workspace install, not `--filter @stunks/web...`. The filtered form selects the
+# workspace packages but NOT the workspace root, so the root devDependency `prisma`
+# is missing and the `pnpm prisma generate` below fails on a command that is not there.
+RUN pnpm install --frozen-lockfile
 
 # ── build ───────────────────────────────────────────────────────────────────
 FROM base AS builder

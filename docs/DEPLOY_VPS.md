@@ -1,7 +1,11 @@
 # Deploying STUNKS.FUN to a VPS
 
-Two containers, one hosted Postgres. The web app serves the site, the indexer writes
-the chain into the database, and nothing else is stateful.
+Two processes, one hosted Postgres. The web app serves the site, the indexer writes the
+chain into the database, and nothing else holds state.
+
+Two paths are documented. The systemd path uses only commands verified on this project
+and is the recommended one. The Docker path is provided but has never been build-tested,
+because the development machine has no Docker.
 
 ## Pick the region first
 
@@ -22,82 +26,167 @@ A tick spends most of its time waiting, and every wait is a round trip to a data
 another continent. Below chain production the backlog grows and never clears, whatever
 else is tuned.
 
-Find your database region in the connection host. Neon encodes it directly:
-`ep-...-pooler.c-7.us-east-2.aws.neon.tech` is `us-east-2`, so put the VPS in Ohio, or
-in `us-east-1` next door. In-region the same round trip is single-digit milliseconds.
+Find the database region in the connection host. Neon encodes it directly:
+`ep-...-pooler.c-7.us-east-2.aws.neon.tech` is `us-east-2`, so put the VPS in Ohio or in
+`us-east-1` next door. In-region that same round trip is single-digit milliseconds.
 
-If the VPS is already somewhere else and cannot move, the alternative is to move the
-database instead — Neon can branch into another region — or to accept the backlog and
-use HyperSync for the catch-up. What does not work is a distant VPS with a distant
-database.
+If the VPS is already elsewhere and cannot move, the alternatives are to move the
+database instead — Neon can branch into another region — or to accept the backlog and use
+HyperSync for the catch-up. What does not work is a distant VPS with a distant database.
 
 ## Requirements
 
-- 2 vCPU, 4 GB RAM, 20 GB disk. The web image builds Next.js, which is the memory peak;
-  the running containers are far lighter. 2 GB works for running but is tight to build.
-- Docker with the Compose plugin.
-- Ports 80 and 443 open if the site is to be public.
+- Ubuntu 22.04 or 24.04. 2 vCPU, 4 GB RAM, 20 GB disk.
+- 4 GB matters for the Next.js build, not for running. On 2 GB, add swap before building.
+- Ports 80 and 443 open only if the site gets a public domain.
 
-## Steps
+## Path A — systemd (recommended)
+
+### 1. A user that is not root
 
 ```bash
-git clone <your remote> stunks && cd stunks
-cp .env.example .env
+sudo adduser --disabled-password --gecos "" stunks
+sudo usermod -aG sudo stunks
+sudo su - stunks
 ```
 
-Fill in `.env`. The values that must be real are `DATABASE_URL` and `DIRECT_URL`; the
-chain, factory and RPC defaults in `.env.example` are the verified mainnet ones and can
-stay as they are. Add `DOMAIN` and `ACME_EMAIL` if the site gets a domain.
+### 2. Node 22 and pnpm
 
-Apply the schema. Safe to run against a database that already has it — it applies only
-what is missing:
+```bash
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo apt-get install -y nodejs git
+sudo corepack enable
+corepack prepare pnpm@9.12.0 --activate
+node -v && pnpm -v      # expect v22.x and 9.12.0
+```
+
+### 3. Clone and configure
+
+```bash
+cd ~ && git clone https://github.com/helps-dev/stunks.git && cd stunks
+cp .env.example .env
+nano .env
+```
+
+Only `DATABASE_URL` and `DIRECT_URL` must be filled in with real values. The chain,
+factory address and RPC defaults in `.env.example` are the verified mainnet ones and can
+stay as they are. Set `NEXT_PUBLIC_APP_URL` to the public URL if there is a domain.
+
+Then lock the file down, since it holds the database password:
+
+```bash
+chmod 600 .env
+```
+
+### 4. Install, migrate, build
 
 ```bash
 pnpm install --frozen-lockfile
-pnpm prisma:deploy
+pnpm prisma:deploy        # safe on a database that already has the schema
+pnpm --filter @stunks/web build
 ```
 
-Set the real domain for the browser bundle. `NEXT_PUBLIC_*` is compiled in at build
-time, so editing `.env` afterwards will not change it — edit the `args` block under
-`web` in `docker-compose.yml`:
-
-```yaml
-NEXT_PUBLIC_APP_URL: "https://your-domain"
-```
-
-Then bring it up:
+The build is the memory-hungry step. If it is killed on a small VPS, add swap:
 
 ```bash
+sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile
+sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+### 5. Start both services
+
+```bash
+sudo cp deploy/stunks-indexer.service deploy/stunks-web.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now stunks-indexer stunks-web
+```
+
+Both units assume `/home/stunks/stunks`. Edit the paths inside them if the clone lives
+elsewhere.
+
+### 6. Verify
+
+```bash
+systemctl status stunks-indexer stunks-web --no-pager
+curl -s http://127.0.0.1:9464/health
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/launch    # expect 200
+journalctl -u stunks-indexer -f
+```
+
+In the health output, `streams[].lagBlocks` is the number to watch. Falling means it is
+catching up; rising means it is losing to chain production, and the region is the first
+thing to check.
+
+### Updating later
+
+```bash
+cd ~/stunks && git pull
+pnpm install --frozen-lockfile
+pnpm prisma:deploy
+pnpm --filter @stunks/web build
+sudo systemctl restart stunks-indexer stunks-web
+```
+
+`next start` serves an existing build, so skipping the build step after a pull silently
+keeps serving the old site.
+
+## Path B — Docker Compose
+
+Not build-tested. One bug was already found by inspection and fixed: both Dockerfiles ran
+a filtered `pnpm install` that excludes the workspace root, so the root devDependency
+`prisma` was absent and `pnpm prisma generate` would have failed on a missing command.
+They now do a full workspace install.
+
+```bash
+cp .env.example .env && nano .env && chmod 600 .env
+# NEXT_PUBLIC_* is compiled into the browser bundle at build time, so edit the
+# `args:` block under `web` in docker-compose.yml, not .env, for the real domain.
 docker compose up -d --build                     # web on 127.0.0.1:3000
 docker compose --profile public up -d --build    # ...plus HTTPS on 80/443
 ```
 
-## Verify
+The schema still has to be applied once, from the host or any machine with the repo:
+`pnpm prisma:deploy`.
+
+## HTTPS and a domain
+
+Point an A record at the VPS, then either use the Caddy profile above, or with the
+systemd path install Caddy directly:
 
 ```bash
-docker compose ps                        # both services healthy
-curl -s http://127.0.0.1:9464/health     # over SSH; not exposed publicly
-curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/launch
+sudo apt-get install -y caddy
+sudo caddy reverse-proxy --from your-domain --to 127.0.0.1:3000
 ```
 
-In the health output, `streams[].lagBlocks` is the number to watch. Falling means the
-indexer is catching up; rising means it is losing to chain production, and the region is
-the first thing to check.
+For something permanent, put `deploy/Caddyfile` at `/etc/caddy/Caddyfile`, set `DOMAIN`
+and `ACME_EMAIL`, change `reverse_proxy web:3000` to `reverse_proxy 127.0.0.1:3000`, then
+`sudo systemctl restart caddy`. Caddy obtains and renews the certificate itself.
+
+## Firewall
+
+```bash
+sudo ufw allow OpenSSH
+sudo ufw allow 80,443/tcp     # only if the site is public
+sudo ufw enable
+```
+
+Do not open 3000 or 9464. Both are meant to be reachable only from the VPS itself.
 
 ## What is deliberately not exposed
 
 The indexer health endpoint has no authentication. It reports checkpoints, RPC endpoint
-URLs and failure counts, so both Compose and the Caddyfile keep it on localhost. Read it
-over SSH. Do not add it to the reverse proxy without putting auth in front of it.
+URLs and failure counts, so it stays on localhost in every path here. Read it over SSH.
+Do not put it behind the public proxy without adding auth first.
 
-The web app itself is intentionally public and unauthenticated: it is a non-custodial
-dApp, users sign with their own wallets, and there is no session to protect. It holds no
-keys and never asks for a private key or seed phrase.
+The web app is intentionally public and unauthenticated: it is a non-custodial dApp, users
+sign with their own wallets, and there is no session to protect. It holds no keys and
+never asks for a private key or seed phrase.
 
 ## Faster catch-up
 
-With a large backlog, set a free token from https://app.envio.dev/api-tokens and switch
-the source, then restart the indexer:
+With a large backlog, get a free token from https://app.envio.dev/api-tokens, add it to
+`.env`, and restart the indexer:
 
 ```
 HYPERSYNC_BEARER_TOKEN=...
@@ -109,9 +198,9 @@ which is what caps the indexer. HyperSync serves millions of blocks per query.
 
 ## Notes
 
-- The web image copies the installed tree and runs `next start`. That is the exact
-  configuration verified on this project. `output: "standalone"` would produce a much
-  smaller image and is worth revisiting, but it has not been build-tested here.
-- Only ever run one indexer replica. Two on the same streams race on checkpoints. The
-  writes are idempotent so nothing corrupts, but they duplicate every RPC call.
+- Only ever run one indexer. Two on the same streams race on checkpoints. The writes are
+  idempotent so nothing corrupts, but they duplicate every RPC call for no benefit.
+- The web image copies the installed tree and runs `next start` rather than using
+  `output: "standalone"`. Standalone would be much smaller and is worth revisiting once
+  there is a machine that can build and test it.
 - `apps/indexer/fly.toml` covers the Fly.io path instead, with the same region rule.
