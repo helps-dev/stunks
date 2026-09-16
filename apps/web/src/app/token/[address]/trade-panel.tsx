@@ -257,7 +257,7 @@ export function TradePanel(props: TradePanelProps) {
   }
 
   return (
-    <div className="panel pad">
+    <div className="panel pad trade-shell">
       <div className="tabs" role="tablist" aria-label="Trade side">
         {(["BUY", "SELL"] as const).map((option) => (
           <button
@@ -402,8 +402,7 @@ export function TradePanel(props: TradePanelProps) {
       {!canTransact.ok && <p className="hint">{canTransact.reason}</p>}
 
       <button
-        className="primary"
-        style={{ marginTop: 12 }}
+        className="btn btn-primary trade-submit"
         onClick={() => void send()}
         disabled={!canTransact.ok || prepared === null || busy}
       >

@@ -1,11 +1,10 @@
-import { getChainContracts, ROBINHOOD_CHAIN_ID } from "@stunks/config";
+import { getChainContracts, KNOWN_RPC_ENDPOINTS, ROBINHOOD_CHAIN_ID } from "@stunks/config";
 import { createReadClient } from "@stunks/web3";
 import {
   readFactoryParameters,
   readLaunchConfigs,
   resolvePonsAddresses,
 } from "@stunks/pons";
-import { KNOWN_RPC_ENDPOINTS } from "@stunks/config";
 import { ConnectWallet } from "@/components/wallet";
 import { LaunchForm } from "./launch-form";
 
@@ -75,50 +74,88 @@ export default async function LaunchPage() {
   }
 
   return (
-    <main>
-      <h1>Launch a token</h1>
-      <p>
-        Deployed through Pons V2 on Robinhood Chain. STUNKS never takes custody, and
-        charges no fee of its own — the only cost is Pons&apos;s launch fee and gas.
-      </p>
+    <main className="launch-page">
+      <section className="launch-page-hero">
+        <p className="page-kicker">Create on Pons V2</p>
+        <h1>
+          Launch with an
+          <span className="text-brand"> honest edge.</span>
+        </h1>
+        <p>
+          Set token terms, disclose creator tax, and optionally protect verified recipients
+          from the launch-block anti-snipe tax. STUNKS does not take custody or add a
+          platform fee.
+        </p>
+      </section>
 
-      <h2>Wallet</h2>
-      <div className="panel pad">
-        <ConnectWallet />
+      <div className="launch-page-layout">
+        <div>
+          {loadError !== null || terms === null ? (
+            <section className="error">
+              <p style={{ color: "var(--text)", marginBottom: 8 }}>
+                <strong>Live launch terms unavailable</strong>
+              </p>
+              <p className="hint">
+                Launch terms could not be read from the chain, so this form is disabled
+                rather than showing values that might be wrong.
+              </p>
+              <p className="hint mono" style={{ marginTop: 10 }}>
+                {loadError}
+              </p>
+            </section>
+          ) : !terms.launchEnabled ? (
+            <section className="error">
+              <p style={{ color: "var(--text)", marginBottom: 8 }}>
+                <strong>Launches disabled by Pons</strong>
+              </p>
+              <p className="hint">
+                Pons currently has launches disabled at the protocol level. Attempting a
+                launch would revert, so STUNKS will not show an actionable form.
+              </p>
+            </section>
+          ) : (
+            <LaunchForm
+              factory={factory}
+              router={terms.router as `0x${string}`}
+              launchFee={terms.launchFee}
+              maxCreatorTaxBps={terms.maxCreatorTaxBps}
+              snipeTaxStartBps={terms.snipeTaxStartBps}
+              snipeTaxSeconds={terms.snipeTaxSeconds}
+              launchConfigId={terms.launchConfigId}
+            />
+          )}
+        </div>
+
+        <aside className="panel launch-sidecard">
+          <p className="page-kicker">Your wallet</p>
+          <h3>Sign from your own wallet</h3>
+          <ConnectWallet />
+          <div className="launch-side-divider" />
+          <div className="trust-list">
+            <div className="trust-row">
+              <span className="trust-row-icon">0</span>
+              <div>
+                <strong>STUNKS fee</strong>
+                <p>Zero. The live Pons launch fee and network gas are disclosed in the form.</p>
+              </div>
+            </div>
+            <div className="trust-row">
+              <span className="trust-row-icon">✓</span>
+              <div>
+                <strong>Exact-value safety</strong>
+                <p>Terms are refreshed from chain before your wallet is asked to sign.</p>
+              </div>
+            </div>
+            <div className="trust-row">
+              <span className="trust-row-icon">◈</span>
+              <div>
+                <strong>No private keys</strong>
+                <p>STUNKS cannot hold or move funds from your wallet.</p>
+              </div>
+            </div>
+          </div>
+        </aside>
       </div>
-
-      {loadError !== null || terms === null ? (
-        <>
-          <h2>Live terms unavailable</h2>
-          <div className="error">
-            <p style={{ color: "var(--text)" }}>
-              Launch terms could not be read from the chain, so this form is disabled
-              rather than showing values that might be wrong.
-            </p>
-            <p className="mono">{loadError}</p>
-          </div>
-        </>
-      ) : !terms.launchEnabled ? (
-        <>
-          <h2>Launches disabled</h2>
-          <div className="error">
-            <p style={{ color: "var(--text)", margin: 0 }}>
-              Pons currently has launches disabled at the protocol level. Nothing STUNKS
-              can do will change that, and attempting a launch would revert.
-            </p>
-          </div>
-        </>
-      ) : (
-        <LaunchForm
-          factory={factory}
-          router={terms.router as `0x${string}`}
-          launchFee={terms.launchFee}
-          maxCreatorTaxBps={terms.maxCreatorTaxBps}
-          snipeTaxStartBps={terms.snipeTaxStartBps}
-          snipeTaxSeconds={terms.snipeTaxSeconds}
-          launchConfigId={terms.launchConfigId}
-        />
-      )}
     </main>
   );
 }

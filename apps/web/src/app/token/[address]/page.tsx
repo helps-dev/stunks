@@ -96,7 +96,7 @@ export default async function TokenPage({ params }: PageProps) {
   // An address from a URL is untrusted input.
   if (!isAddress(address)) {
     return (
-      <main>
+      <main className="token-page">
         <h1>Invalid address</h1>
         <p>That is not a valid EVM address.</p>
         <p>
@@ -183,7 +183,7 @@ export default async function TokenPage({ params }: PageProps) {
   // STUNKS becoming a trading UI for an arbitrary contract that merely looks like one.
   if (live?.exists === false) {
     return (
-      <main>
+      <main className="token-page">
         <h1>Not a Pons V2 launch</h1>
         <div className="error">
           <p style={{ color: "var(--text)" }}>
@@ -203,7 +203,7 @@ export default async function TokenPage({ params }: PageProps) {
 
   if (!token) {
     return (
-      <main>
+      <main className="token-page">
         <h1>Not indexed yet</h1>
         <p>
           {live
@@ -240,11 +240,17 @@ export default async function TokenPage({ params }: PageProps) {
     : null;
 
   return (
-    <main>
+    <main className="token-page">
       <div className="tokenhead">
-        <div>
-          <h1 style={{ marginBottom: 2 }}>{withDollar(token.symbol)}</h1>
-          <p style={{ margin: 0 }}>{token.name}</p>
+        <div className="token-identity">
+          <span className="token-avatar token-avatar-lg" aria-hidden="true">
+            {token.symbol.replace(/[^a-z0-9]/gi, "").slice(0, 2).toUpperCase() || "?"}
+          </span>
+          <div>
+            <p className="page-kicker">Live Pons V2 launch</p>
+            <h1>{withDollar(token.symbol)}</h1>
+            <p className="token-subtitle">{token.name}</p>
+          </div>
         </div>
         <div className="tokenhead-stats">
           <Stat
@@ -262,8 +268,14 @@ export default async function TokenPage({ params }: PageProps) {
         </div>
       </div>
 
-      {/* Venue comes from the live read, never from the database. */}
-      <h2>Trading</h2>
+      <section className="token-trade-section">
+        <div className="section-heading">
+          <div>
+            <p className="page-kicker">Live trading venue</p>
+            <h2>Trade {withDollar(token.symbol)}</h2>
+          </div>
+          {live && live.venueKind === "CURVE" && <span className="badge ok">Pons curve</span>}
+        </div>
       {liveError !== null ? (
         <div className="error">
           <p style={{ color: "var(--text)", margin: 0 }}>
@@ -273,13 +285,21 @@ export default async function TokenPage({ params }: PageProps) {
           <p className="mono hint">{liveError}</p>
         </div>
       ) : live && live.venueKind === "CURVE" ? (
-        <>
-          <p className="hint" style={{ marginTop: 0 }}>
-            Tradeable on its Pons bonding curve. Total fee per trade:{" "}
-            <span className="mono">{formatBps(live.feeBps + live.creatorTaxBps)}</span> (
-            {formatBps(live.feeBps)} curve + {formatBps(live.creatorTaxBps)} creator).
-            STUNKS adds nothing on top.
-          </p>
+        <div className="token-trade-grid">
+          <div className="panel pad token-trade-summary">
+            <span className="surface-label">Verified curve route</span>
+            <p className="hint" style={{ marginTop: 10 }}>
+              Tradeable on its Pons bonding curve. Total fee per trade:{" "}
+              <span className="mono">{formatBps(live.feeBps + live.creatorTaxBps)}</span> (
+              {formatBps(live.feeBps)} curve + {formatBps(live.creatorTaxBps)} creator).
+              STUNKS adds nothing on top.
+            </p>
+            <div className="trade-summary-points">
+              <span>✓ Fresh quote before signing</span>
+              <span>✓ On-chain minimum received</span>
+              <span>✓ Non-custodial wallet flow</span>
+            </div>
+          </div>
           <TradePanel
             token={token.address as Address}
             factory={getChainContracts(ROBINHOOD_CHAIN_ID).ponsV2Factory}
@@ -290,7 +310,7 @@ export default async function TokenPage({ params }: PageProps) {
             quoteIsNative={isNative}
             quoteTokenAddress={token.pairTokenAddress as Address}
           />
-        </>
+        </div>
       ) : live && live.venueKind === "UNISWAP_V4" ? (
         <div className="panel pad">
           <p className="hint" style={{ margin: 0 }}>
@@ -308,6 +328,7 @@ export default async function TokenPage({ params }: PageProps) {
           </p>
         </div>
       )}
+      </section>
 
       {progress && live && live.phase === 0 && (
         <>

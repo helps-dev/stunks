@@ -385,8 +385,8 @@ export function LaunchForm(props: LaunchFormProps) {
   }
 
   return (
-    <div className="stack">
-      <section className="panel pad">
+    <div className="stack launch-form">
+      <section className="panel pad launch-section">
         <h2>Token</h2>
         <label className="field">
           <span>Name</span>
@@ -423,7 +423,7 @@ export function LaunchForm(props: LaunchFormProps) {
         </label>
       </section>
 
-      <section className="panel pad">
+      <section className="panel pad launch-section">
         <h2>Economics</h2>
         <label className="field">
           <span>Creator tax (%)</span>
@@ -457,7 +457,7 @@ export function LaunchForm(props: LaunchFormProps) {
         </p>
       </section>
 
-      <section className="panel pad">
+      <section className="panel pad launch-section">
         <h2>Protected launch — whitelist</h2>
         <p className="hint">
           Whitelisted addresses pay no anti-snipe tax. Because Pons checks the tax against
@@ -595,7 +595,7 @@ export function LaunchForm(props: LaunchFormProps) {
       </section>
 
       {(bundle.running || bundle.results.length > 0 || bundle.error !== null) && (
-        <section className="panel pad">
+        <section className="panel pad launch-section">
           <h2>Bundle buys</h2>
           {bundle.note !== null && <p className="hint">{bundle.note}</p>}
           {bundle.error !== null && <p className="hint error-text">{bundle.error}</p>}
@@ -642,7 +642,7 @@ export function LaunchForm(props: LaunchFormProps) {
         </section>
       )}
 
-      <section className="panel pad">
+      <section className="panel pad launch-section">
         <h2>Launch</h2>
         {!canTransact.ok && <p className="hint error-text">{canTransact.reason}</p>}
 

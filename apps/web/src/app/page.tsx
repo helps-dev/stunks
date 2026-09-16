@@ -1,36 +1,42 @@
-import { formatUnitsExact, ratioBps } from "@stunks/utils";
+import Image from "next/image";
+import Link from "next/link";
+import {
+  formatBps,
+  formatBlockLag,
+  formatCompact,
+  formatUnitsExact,
+  ratioBps,
+  shortAddress,
+} from "@stunks/utils";
 import { BLOCK_TIME_SECONDS, BLOCKS_PER_DAY } from "@stunks/config";
 import { readChainSnapshot } from "@/lib/read-chain";
+import heroBackdrop from "../../../../Asset/banner-stunks.png";
+import heroLogo from "../../../../Asset/logo-transparent.png";
+import { exploreTokens, platformStats } from "@/lib/queries";
 
 /**
- * Phase 1 proof-of-read.
+ * STUNKS landing page.
  *
- * Every row on this page is a value read from Robinhood Chain at request time, with
- * the source of the value stated next to it. There are deliberately no token cards,
- * no charts, no volume figures and no placeholder statistics: none of that data
- * exists yet, and inventing it is exactly what this project forbids.
+ * The visual layer is intentionally new, but its facts are not. Hero metrics come from
+ * the indexed database and are clearly marked as indexed; protocol parameters, head,
+ * and fee policy still come from a fresh Pons V2 read. If either source fails, the page
+ * says so rather than filling the premium surface with plausible invented numbers.
  */
 
-// Always read fresh. Caching a chain read would undermine the whole point.
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 function bpsToPercent(bps: bigint | number): string {
-  const value = typeof bps === "bigint" ? bps : BigInt(bps);
-  const whole = value / 100n;
-  const fraction = value % 100n;
-  return fraction === 0n
-    ? `${whole}%`
-    : `${whole}.${fraction.toString().padStart(2, "0")}%`;
+  return formatBps(bps);
 }
 
-interface Row {
-  label: string;
-  value: string;
-  source: string;
+interface TelemetryRow {
+  readonly label: string;
+  readonly value: string;
+  readonly source: string;
 }
 
-function Table({ rows }: { rows: readonly Row[] }) {
+function TelemetryTable({ rows }: { rows: readonly TelemetryRow[] }) {
   return (
     <div className="panel">
       <table>
@@ -57,282 +63,351 @@ function Table({ rows }: { rows: readonly Row[] }) {
 
 export default async function Page() {
   const snapshot = await readChainSnapshot();
+  const chainHead = snapshot.ok ? snapshot.blockNumber : null;
 
-  if (!snapshot.ok) {
-    return (
-      <main>
-        <h1>STUNKS.FUN</h1>
-        <p>Phase 1 foundation — live read of Pons V2 on Robinhood Chain.</p>
+  let indexed: {
+    readonly stats: Awaited<ReturnType<typeof platformStats>>;
+    readonly trending: Awaited<ReturnType<typeof exploreTokens>>;
+  } | null = null;
+  let indexError: string | null = null;
 
-        <h2>Chain unreachable</h2>
-        <div className="error">
-          <p style={{ color: "var(--text)", marginBottom: 10 }}>
-            No RPC endpoint answered, so this page has nothing truthful to show.
-          </p>
-          <p className="mono" style={{ marginBottom: 10 }}>
-            {snapshot.message}
-          </p>
-          <p style={{ margin: 0 }}>
-            Endpoints tried: {snapshot.endpointsTried.join(", ")}
-          </p>
-        </div>
-        <p className="note">
-          This is the intended behaviour. The page reports the failure rather than
-          rendering plausible-looking numbers from a cache or a fixture.
-        </p>
-      </main>
-    );
+  try {
+    const [stats, trending] = await Promise.all([
+      platformStats(),
+      exploreTokens({ sort: "TRENDING", limit: 5, chainHead }),
+    ]);
+    indexed = { stats, trending };
+  } catch (error) {
+    indexError = error instanceof Error ? error.message : String(error);
   }
 
-  const { parameters, feePolicy, addresses, configs } = snapshot;
+  const snapshotError = snapshot.ok ? null : snapshot;
+  const telemetry = snapshot.ok
+    ? {
+        chain: [
+          { label: "Chain", value: `Robinhood Chain (${snapshot.chainId})`, source: "eth_chainId" },
+          { label: "Head block", value: snapshot.blockNumber.toString(), source: "eth_getBlockByNumber" },
+          {
+            label: "Block time",
+            value: `~${BLOCK_TIME_SECONDS}s · ${BLOCKS_PER_DAY.toLocaleString("en-US")} blocks/day`,
+            source: "Phase 0 measurement",
+          },
+          { label: "RPC", value: snapshot.endpoint, source: "configuration" },
+        ] satisfies readonly TelemetryRow[],
+        protocol: [
+          {
+            label: "Launch fee",
+            value: `${formatUnitsExact(snapshot.parameters.launchFee, 18)} ETH`,
+            source: "factory.launchFee()",
+          },
+          {
+            label: "Max creator tax",
+            value: bpsToPercent(snapshot.parameters.maxCreatorTaxBps),
+            source: "factory.maxCreatorTaxBps()",
+          },
+          {
+            label: "Anti-snipe window",
+            value: `${snapshot.parameters.snipeTaxSeconds}s`,
+            source: "factory.snipeTaxSeconds()",
+          },
+          {
+            label: "STUNKS platform revenue",
+            value: `${snapshot.platformRevenue.amount} — none`,
+            source: "verified fee routing",
+          },
+          {
+            label: "Factory",
+            value: shortAddress(snapshot.addresses.factory),
+            source: "configuration",
+          },
+          {
+            label: "Meme hook / fee policy",
+            value: shortAddress(snapshot.addresses.memeHook),
+            source: "factory.memeHook()",
+          },
+        ] satisfies readonly TelemetryRow[],
+      }
+    : null;
 
-  const chainRows: Row[] = [
-    { label: "Chain ID", value: String(snapshot.chainId), source: "eth_chainId" },
-    {
-      label: "Head block",
-      value: snapshot.blockNumber.toString(),
-      source: "eth_blockNumber",
-    },
-    {
-      label: "Head timestamp",
-      // eslint-disable-next-line no-restricted-syntax -- a unix timestamp is not money; Date requires a number
-      value: new Date(Number(snapshot.blockTimestamp) * 1000).toISOString(),
-      source: "eth_getBlockByNumber",
-    },
-    {
-      label: "Block time",
-      value: `~${BLOCK_TIME_SECONDS}s (~${BLOCKS_PER_DAY.toLocaleString("en-US")} blocks/day)`,
-      source: "measured in Phase 0 audit",
-    },
-    { label: "RPC endpoint", value: snapshot.endpoint, source: "configuration" },
-  ];
-
-  const addressRows: Row[] = [
-    {
-      label: "V2 factory",
-      value: addresses.factory,
-      source: "configuration (the only one)",
-    },
-    {
-      label: "Factory deploy block",
-      value: snapshot.factoryDeployBlock.toString(),
-      source: "binary search over eth_getCode",
-    },
-    {
-      label: "Meme hook / fee policy",
-      value: addresses.memeHook,
-      source: "factory.memeHook()",
-    },
-    {
-      label: "Launch + buy router",
-      value: addresses.launchAndBuyRouter,
-      source: "factory.launchForwarder()",
-    },
-    {
-      label: "Graduation executor",
-      value: addresses.graduationExecutor,
-      source: "factory.graduationExecutor()",
-    },
-    {
-      label: "Launch deployer",
-      value: addresses.launchDeployer,
-      source: "factory.launchDeployer()",
-    },
-    { label: "Launch locker", value: addresses.locker, source: "factory.locker()" },
-    {
-      label: "Buyback vault",
-      value: addresses.buybackVault,
-      source: "factory.buybackVault()",
-    },
-    {
-      label: "Graduation guard",
-      value: addresses.graduationGuard,
-      source: "factory.graduationGuard()",
-    },
-    {
-      label: "Uniswap V4 PoolManager",
-      value: addresses.poolManager,
-      source: "factory.poolManager()",
-    },
-    {
-      label: "Uniswap V4 PositionManager",
-      value: addresses.positionManager,
-      source: "factory.positionManager()",
-    },
-    { label: "Fee escrow", value: addresses.feeEscrow, source: "memeHook.feeEscrow()" },
-  ];
-
-  const parameterRows: Row[] = [
-    {
-      label: "Launch fee",
-      value: `${formatUnitsExact(parameters.launchFee, 18)} ETH`,
-      source: "factory.launchFee()",
-    },
-    {
-      label: "Launches enabled",
-      value: parameters.launchEnabled ? "yes" : "no",
-      source: "factory.launchEnabled()",
-    },
-    {
-      label: "Max creator tax",
-      value: bpsToPercent(parameters.maxCreatorTaxBps),
-      source: "factory.maxCreatorTaxBps()",
-    },
-    {
-      label: "Anti-snipe start",
-      value: bpsToPercent(parameters.snipeTaxStartBps),
-      source: "factory.snipeTaxStartBps()",
-    },
-    {
-      label: "Anti-snipe window",
-      value: `${parameters.snipeTaxSeconds}s`,
-      source: "factory.snipeTaxSeconds()",
-    },
-    { label: "Protocol owner", value: parameters.owner, source: "factory.owner()" },
-  ];
-
-  const feeRows: Row[] = [
-    {
-      label: "Protocol share of trade fee",
-      value: bpsToPercent(feePolicy.protocolFeeShareBps),
-      source: "memeHook.currentFeePolicy()",
-    },
-    {
-      label: "Buyback earmark",
-      value: bpsToPercent(feePolicy.buybackBurnBps),
-      source: "memeHook.currentFeePolicy()",
-    },
-    {
-      label: "Graduated-pool hook fee",
-      value: bpsToPercent(feePolicy.hookFeeBps),
-      source: "memeHook.currentFeePolicy()",
-    },
-    {
-      label: "Max internal price impact",
-      value: bpsToPercent(feePolicy.maxInternalPriceImpactBps),
-      source: "memeHook.currentFeePolicy()",
-    },
-    {
-      label: "Protocol fee recipient",
-      value: feePolicy.protocolFeeRecipient,
-      source: "memeHook.currentFeePolicy()",
-    },
-    {
-      label: "STUNKS platform revenue",
-      value: `${snapshot.platformRevenue.amount} — none`,
-      source: "verified: no fee route exists",
-    },
-  ];
+  const activeConfig = snapshot.ok ? snapshot.configs.find((config) => config.enabled) : null;
+  const reserved = snapshot.ok && activeConfig
+    ? snapshot.reservedTokensByConfig[snapshot.configs.indexOf(activeConfig)] ?? 0n
+    : null;
+  const reservedBps = activeConfig && reserved !== null
+    ? ratioBps(reserved, activeConfig.supply)
+    : null;
 
   return (
-    <main>
-      <h1>STUNKS.FUN</h1>
-      <p>
-        Phase 1 foundation. Everything below was read from Robinhood Chain when this page
-        was requested, and each row states where its value came from. There is no trading,
-        no launching, and no indexed data yet — so there are no token lists, charts, or
-        volume figures on this page.
-      </p>
-      <p>
-        <span className="badge ok">live read</span>{" "}
-        <span className="mono" style={{ color: "var(--muted)" }}>
-          {snapshot.readAt}
-        </span>
-      </p>
-
-      <h2>Chain</h2>
-      <Table rows={chainRows} />
-
-      <h2>Pons V2 address graph</h2>
-      <p>
-        Only the factory address is configured. Every other address is resolved by calling
-        the factory, because the protocol owner can rotate several of them and a hardcoded
-        list would go stale silently.
-      </p>
-      <Table rows={addressRows} />
-
-      <h2>Factory parameters</h2>
-      <p>
-        All of these are owner-mutable, so they are read live rather than cached as
-        constants. The anti-snipe window in particular differs between Pons&apos;s
-        published source and its deployment.
-      </p>
-      <Table rows={parameterRows} />
-
-      <h2>Launch configuration</h2>
-      {configs.length === 0 ? (
-        <p>The factory reports no launch configurations.</p>
-      ) : (
-        configs.map((config, index) => {
-          const reserved = snapshot.reservedTokensByConfig[index] ?? 0n;
-          const reservedBps = ratioBps(reserved, config.supply);
-          const rows: Row[] = [
-            {
-              label: "Supply",
-              value: formatUnitsExact(config.supply, 18),
-              source: "getLaunchConfig().supply",
-            },
-            {
-              label: "Curve fee",
-              value: bpsToPercent(config.curveFeeBps),
-              source: "getLaunchConfig().curveFeeBps",
-            },
-            {
-              label: "Phantom quote reserve",
-              value: `${formatUnitsExact(config.phantomQuote, 18)} ETH`,
-              source: "getLaunchConfig().phantomQuote",
-            },
-            {
-              label: "Graduation threshold",
-              value: `${formatUnitsExact(config.graduationThreshold, 18)} ETH`,
-              source: "getLaunchConfig().graduationThreshold",
-            },
-            {
-              label: "Pool fee / tick spacing",
-              value: `${config.poolFee} / ${config.tickSpacing}`,
-              source: "getLaunchConfig()",
-            },
-            {
-              label: "Reserved for pool",
-              value: `${formatUnitsExact(reserved, 18)} (${bpsToPercent(reservedBps)} of supply)`,
-              source: "derived: supply x phantom / (phantom + threshold)",
-            },
-            {
-              label: "Sellable on curve",
-              value: bpsToPercent(10_000n - reservedBps),
-              source: "derived",
-            },
-            {
-              label: "Enabled",
-              value: config.enabled ? "yes" : "no",
-              source: "getLaunchConfig().enabled",
-            },
-          ];
-          return (
-            <div key={config.id.toString()} style={{ marginBottom: 20 }}>
-              <p style={{ marginBottom: 8 }}>
-                Config <span className="mono">#{config.id.toString()}</span>
-              </p>
-              <Table rows={rows} />
+    <main className="home-main">
+      <section className="home-hero">
+        <Image
+          src={heroBackdrop}
+          alt=""
+          fill
+          sizes="100vw"
+          className="hero-backdrop"
+        />
+        <div className="home-hero-inner">
+          <div className="hero-copy">
+            <p className="hero-eyebrow">Robinhood Chain · Pons V2</p>
+            <h1 className="hero-title">
+              Launch. Trade.
+              <em>Grow Together.</em>
+            </h1>
+            <p>
+              A non-custodial launchpad and curve-trading interface for real Pons V2
+              launches. No private keys, no synthetic market data, and no STUNKS
+              platform fee.
+            </p>
+            <div className="hero-actions">
+              <Link href="/explore" className="btn btn-primary">
+                Explore tokens <span className="hero-action-arrow">→</span>
+              </Link>
+              <Link href="/launch" className="btn">
+                Launch token <span className="hero-action-arrow">↗</span>
+              </Link>
             </div>
-          );
-        })
-      )}
+          </div>
 
-      <h2>Fee policy</h2>
-      <p>
-        Read from the meme hook, which is itself the protocol&apos;s fee policy — the
-        factory has no separate fee-policy getter.
-      </p>
-      <Table rows={feeRows} />
-      <p className="note">{snapshot.platformRevenue.reason}</p>
+          <div className="hero-visual" aria-hidden="true">
+            <Image
+              src={heroLogo}
+              alt=""
+              priority
+              sizes="(max-width: 820px) 265px, 430px"
+              className="hero-logo"
+            />
+          </div>
 
-      <h2>What is not here</h2>
-      <p>
-        No tokens, trades, holders, volume, market caps, charts or leaderboards. That data
-        comes from the indexer, which is Phase 3. Until it exists, this application will
-        not display it — not even as a placeholder.
-      </p>
+          <aside className="hero-rail" aria-label="Indexed platform statistics">
+            <div className="hero-metric-card">
+              <span className="surface-label">Indexed trade activity</span>
+              <div className="hero-metric-value">
+                {indexed ? indexed.stats.tradeCount.toLocaleString("en-US") : "—"}
+                <small>{indexed ? "real events" : "unavailable"}</small>
+              </div>
+              {indexed ? (
+                <>
+                  <div className="hero-mini-stats">
+                    <div>
+                      <span className="card-label">Tokens</span>
+                      <strong>{indexed.stats.tokenCount.toLocaleString("en-US")}</strong>
+                    </div>
+                    <div>
+                      <span className="card-label">Creators</span>
+                      <strong>{indexed.stats.creatorCount.toLocaleString("en-US")}</strong>
+                    </div>
+                    <div>
+                      <span className="card-label">Graduated</span>
+                      <strong>{indexed.stats.graduatedCount.toLocaleString("en-US")}</strong>
+                    </div>
+                  </div>
+                  <div
+                    className={
+                      indexed.trending.staleness.isStale
+                        ? "hero-freshness stale"
+                        : "hero-freshness"
+                    }
+                  >
+                    <span>{indexed.trending.staleness.isStale ? "!" : "✓"}</span>
+                    <p>
+                      {indexed.trending.staleness.lagBlocks !== null
+                        ? `Indexed to ${indexed.trending.staleness.indexedBlock} — ${formatBlockLag(
+                            BigInt(indexed.trending.staleness.lagBlocks),
+                            BLOCK_TIME_SECONDS,
+                          )}${indexed.trending.staleness.isStale ? " behind chain" : " current"}`
+                        : "Live chain unavailable — indexed figures only"}
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <p className="hint">Indexed market data is unavailable right now.</p>
+              )}
+            </div>
+
+            <div className="hero-competition-card">
+              <span className="hero-competition-icon">✦</span>
+              <div>
+                <strong>Zero STUNKS fee</strong>
+                <p>Route directly to verified Pons V2 curve contracts.</p>
+              </div>
+              <span className="hero-competition-arrow">→</span>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <div className="home-content">
+        <section className="feature-grid" aria-label="STUNKS capabilities">
+          <article className="panel feature-card">
+            <span className="feature-icon">↗</span>
+            <h3>Launch</h3>
+            <p>Create through live Pons V2 terms. STUNKS never takes custody.</p>
+            <Link href="/launch">Open launch flow →</Link>
+          </article>
+          <article className="panel feature-card">
+            <span className="feature-icon">⇄</span>
+            <h3>Trade</h3>
+            <p>Get a fresh curve quote, real min-out protection, and explicit approvals.</p>
+            <Link href="/explore">Find a curve token →</Link>
+          </article>
+          <article className="panel feature-card">
+            <span className="feature-icon">⌕</span>
+            <h3>Explore</h3>
+            <p>Discover indexed launches, activity, graduation progress, and history.</p>
+            <Link href="/explore">Browse the market →</Link>
+          </article>
+          <article className="panel feature-card">
+            <span className="feature-icon">◈</span>
+            <h3>Protected launch</h3>
+            <p>Use the verified 31-address exemption cap with honest anti-snipe disclosure.</p>
+            <Link href="/launch">Set up protection →</Link>
+          </article>
+        </section>
+
+        <section className="home-grid" style={{ marginTop: 16 }}>
+          <div className="home-section-card">
+            <div className="home-section-header">
+              <h2>Trending tokens</h2>
+              <Link href="/explore?sort=TRENDING">View all →</Link>
+            </div>
+            {indexed && indexed.trending.tokens.length > 0 ? (
+              <table className="home-token-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Token</th>
+                    <th>Market cap</th>
+                    <th>Volume 24h</th>
+                    <th>Trades</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {indexed.trending.tokens.map((token, index) => (
+                    <tr key={token.address}>
+                      <td className="source">{index + 1}</td>
+                      <td>
+                        <div className="home-token-cell">
+                          <span className="token-avatar">{token.symbol.slice(0, 2).toUpperCase()}</span>
+                          <span>
+                            <span className="home-token-symbol">{token.symbol}</span>
+                            <span className="home-token-name">{token.name}</span>
+                          </span>
+                        </div>
+                      </td>
+                      <td className="value">
+                        {formatCompact(BigInt(token.marketCap), token.pairTokenDecimals)}
+                      </td>
+                      <td className="value">
+                        {formatCompact(BigInt(token.volume24h), token.pairTokenDecimals)}
+                      </td>
+                      <td className="value">{token.tradeCount.toLocaleString("en-US")}</td>
+                      <td>
+                        <Link href={`/token/${token.address}`} className="badge ok">
+                          Trade
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <div className="panel pad" style={{ border: 0, borderRadius: 0 }}>
+                <p className="hint">
+                  {indexError
+                    ? "Indexed market data could not be loaded, so no token ranking is shown."
+                    : "No indexed tokens are available for this view yet."}
+                </p>
+              </div>
+            )}
+          </div>
+
+          <aside className="home-section-card home-side-panel">
+            <h2>Built for real trades</h2>
+            <div className="trust-list">
+              <div className="trust-row">
+                <span className="trust-row-icon">✓</span>
+                <div>
+                  <strong>Live venue check</strong>
+                  <p>Trading is offered only after the Pons venue is read from chain.</p>
+                </div>
+              </div>
+              <div className="trust-row">
+                <span className="trust-row-icon">◌</span>
+                <div>
+                  <strong>Honest data freshness</strong>
+                  <p>Indexer lag is surfaced rather than hidden behind a fake live chart.</p>
+                </div>
+              </div>
+              <div className="trust-row">
+                <span className="trust-row-icon">◈</span>
+                <div>
+                  <strong>Non-custodial</strong>
+                  <p>Your wallet signs. STUNKS never receives a seed phrase or private key.</p>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </section>
+
+        <section className="protocol-disclosure">
+          <details>
+            <summary>Protocol telemetry and source-of-truth details</summary>
+            {snapshot.ok && telemetry ? (
+              <div className="stack" style={{ marginTop: 16 }}>
+                <div>
+                  <h2>Live chain status</h2>
+                  <TelemetryTable rows={telemetry.chain} />
+                </div>
+                <div>
+                  <h2>Live Pons V2 terms</h2>
+                  <TelemetryTable rows={telemetry.protocol} />
+                </div>
+                {activeConfig && reserved !== null && reservedBps !== null && (
+                  <div>
+                    <h2>Active launch configuration</h2>
+                    <TelemetryTable
+                      rows={[
+                        {
+                          label: "Supply",
+                          value: formatUnitsExact(activeConfig.supply, 18),
+                          source: "getLaunchConfig().supply",
+                        },
+                        {
+                          label: "Curve fee",
+                          value: bpsToPercent(activeConfig.curveFeeBps),
+                          source: "getLaunchConfig().curveFeeBps",
+                        },
+                        {
+                          label: "Graduation threshold",
+                          value: `${formatUnitsExact(activeConfig.graduationThreshold, 18)} ETH`,
+                          source: "getLaunchConfig().graduationThreshold",
+                        },
+                        {
+                          label: "Reserved for pool",
+                          value: `${formatUnitsExact(reserved, 18)} (${bpsToPercent(reservedBps)} of supply)`,
+                          source: "derived from launch configuration",
+                        },
+                      ]}
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="error" style={{ marginTop: 16 }}>
+                <p style={{ color: "var(--text)", marginBottom: 8 }}>
+                  No RPC endpoint answered, so live protocol telemetry is not shown.
+                </p>
+                <p className="hint mono">{snapshotError?.message ?? "Unknown RPC error"}</p>
+                <p className="hint">
+                  Endpoints tried: {snapshotError?.endpointsTried.join(", ") ?? "unknown"}
+                </p>
+              </div>
+            )}
+          </details>
+        </section>
+      </div>
     </main>
   );
 }

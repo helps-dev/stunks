@@ -11,10 +11,6 @@ import { TokenCard } from "@/components/token-card";
  * Every token here came from an indexed `TokenLaunched` event. There are no seeded or
  * example tokens, so an empty page means the indexer has not caught up — and the page
  * says exactly that rather than filling the space.
- *
- * The staleness banner is not optional politeness. The indexer currently sustains fewer
- * blocks per second than the chain produces, so these figures can genuinely lag, and a
- * user comparing them against a wallet balance deserves to know.
  */
 
 export const dynamic = "force-dynamic";
@@ -81,109 +77,123 @@ export default async function ExplorePage({ searchParams }: PageProps) {
   const staleness = result.staleness;
 
   return (
-    <main>
-      <h1>Explore</h1>
-      <p>
-        Tokens launched through Pons V2 on Robinhood Chain, indexed from on-chain events.
-        STUNKS charges no fee.
-      </p>
+    <main className="explore-page">
+      <section className="explore-hero">
+        <p className="page-kicker">Market discovery</p>
+        <h1>
+          Find your next
+          <span className="text-brand"> curve.</span>
+        </h1>
+        <p>
+          Discover real Pons V2 launches indexed from Robinhood Chain. Every metric below
+          is labelled with its freshness so you can see what the indexer has actually
+          reached.
+        </p>
+      </section>
 
-      <div className="statsrow">
+      <div className="statsrow explore-stats">
         <Stat label="Tokens indexed" value={stats.tokenCount.toLocaleString("en-US")} />
         <Stat label="Graduated" value={stats.graduatedCount.toLocaleString("en-US")} />
         <Stat label="Trades" value={stats.tradeCount.toLocaleString("en-US")} />
         <Stat label="Creators" value={stats.creatorCount.toLocaleString("en-US")} />
         <Stat
-          label="Volume (all time)"
-          value={`${formatCompact(BigInt(stats.totalVolume), 18)} ETH`}
+          label="Indexed volume"
+          value={`${formatCompact(BigInt(stats.totalVolume), 18)} quote`}
         />
       </div>
 
       {/* Honest about how current this is, including when it is not current. */}
-      <div
-        className={staleness.isStale ? "error" : "panel pad"}
-        style={{ marginTop: 16 }}
-      >
-        {staleness.lagBlocks !== null ? (
-          <p className="hint" style={{ margin: 0 }}>
-            Indexed to block <span className="mono">{staleness.indexedBlock}</span> of{" "}
-            <span className="mono">{staleness.chainHead}</span> —{" "}
-            {formatBlockLag(BigInt(staleness.lagBlocks), BLOCK_TIME_SECONDS)}.
-            {staleness.isStale &&
-              " Figures below may be well behind the chain. Treat them as indicative, not current."}
-          </p>
-        ) : (
-          <p className="hint" style={{ margin: 0 }}>
-            Could not determine how far the indexer is behind. Treat these figures as
-            indicative only.
-          </p>
-        )}
+      <div className={staleness.isStale ? "indexer-status stale" : "indexer-status"}>
+        <span className="indexer-status-icon">{staleness.isStale ? "!" : "✓"}</span>
+        <div>
+          <strong>{staleness.isStale ? "Indexer catching up" : "Indexer current"}</strong>
+          {staleness.lagBlocks !== null ? (
+            <p>
+              Indexed to block <span className="mono">{staleness.indexedBlock}</span> of{" "}
+              <span className="mono">{staleness.chainHead}</span> —{" "}
+              {formatBlockLag(BigInt(staleness.lagBlocks), BLOCK_TIME_SECONDS)}.
+              {staleness.isStale && " Figures below may be behind the chain."}
+            </p>
+          ) : (
+            <p>Could not determine current chain lag. Treat metrics as indicative only.</p>
+          )}
+        </div>
       </div>
 
-      <h2>Browse</h2>
-      <form className="searchrow" method="get">
-        <input
-          type="search"
-          name="q"
-          defaultValue={search ?? ""}
-          placeholder="Search symbol, name, or paste a contract address"
-          aria-label="Search tokens"
-        />
-        <input type="hidden" name="sort" value={sort} />
-        <button type="submit" className="btn">
-          Search
-        </button>
-      </form>
-
-      <nav className="tabs">
-        {TABS.map((tab) => {
-          const query = new URLSearchParams({ sort: tab.key });
-          if (search) query.set("q", search);
-          return (
-            <a
-              key={tab.key}
-              href={`/explore?${query.toString()}`}
-              className={tab.key === sort ? "tab active" : "tab"}
-            >
-              {tab.label}
-            </a>
-          );
-        })}
-      </nav>
-
-      {result.tokens.length === 0 ? (
-        <div className="panel pad">
-          <p className="hint" style={{ margin: 0 }}>
-            {search
-              ? `Nothing indexed matches "${search}".`
-              : "No tokens indexed yet for this view. The indexer may still be catching up — " +
-                "this space is left empty rather than filled with examples."}
-          </p>
-        </div>
-      ) : (
-        <>
-          <div className="cardgrid">
-            {result.tokens.map((token) => (
-              <TokenCard key={token.address} token={token} />
-            ))}
+      <section className="explore-browse">
+        <div className="section-heading">
+          <div>
+            <p className="page-kicker">Browse live index</p>
+            <h2>{search ? "Search results" : "Token terminal"}</h2>
           </div>
+          <span className="badge ok">Zero STUNKS fee</span>
+        </div>
 
-          {result.hasMore && result.nextCursor && (
-            <div style={{ marginTop: 20 }}>
+        <form className="searchrow" method="get">
+          <input
+            type="search"
+            name="q"
+            defaultValue={search ?? ""}
+            placeholder="Search symbol, name, or paste a contract address"
+            aria-label="Search tokens"
+          />
+          <input type="hidden" name="sort" value={sort} />
+          <button type="submit" className="btn btn-primary">
+            Search
+          </button>
+        </form>
+
+        <nav className="tabs" aria-label="Token sorting">
+          {TABS.map((tab) => {
+            const query = new URLSearchParams({ sort: tab.key });
+            if (search) query.set("q", search);
+            return (
               <a
-                className="btn"
-                href={`/explore?${new URLSearchParams({
-                  sort,
-                  ...(search ? { q: search } : {}),
-                  cursor: result.nextCursor,
-                }).toString()}`}
+                key={tab.key}
+                href={`/explore?${query.toString()}`}
+                className={tab.key === sort ? "tab active" : "tab"}
               >
-                Next page
+                {tab.label}
               </a>
+            );
+          })}
+        </nav>
+
+        {result.tokens.length === 0 ? (
+          <div className="empty-state panel">
+            <span className="empty-state-mark">⌕</span>
+            <h3>No token found</h3>
+            <p>
+              {search
+                ? `Nothing indexed matches "${search}".`
+                : "No tokens are indexed for this view yet. The indexer may still be catching up."}
+            </p>
+          </div>
+        ) : (
+          <>
+            <div className="cardgrid">
+              {result.tokens.map((token) => (
+                <TokenCard key={token.address} token={token} />
+              ))}
             </div>
-          )}
-        </>
-      )}
+
+            {result.hasMore && result.nextCursor && (
+              <div className="pagination-row">
+                <a
+                  className="btn"
+                  href={`/explore?${new URLSearchParams({
+                    sort,
+                    ...(search ? { q: search } : {}),
+                    cursor: result.nextCursor,
+                  }).toString()}`}
+                >
+                  Load more tokens →
+                </a>
+              </div>
+            )}
+          </>
+        )}
+      </section>
     </main>
   );
 }

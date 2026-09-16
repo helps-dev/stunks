@@ -11,6 +11,11 @@ const nextConfig = {
     "@stunks/utils",
     "@stunks/web3",
   ],
+  experimental: {
+    // The approved STUNKS visual assets live at the monorepo root. Static importing
+    // them keeps images versioned with the project and avoids an external image host.
+    externalDir: true,
+  },
   webpack: (config) => {
     // The workspace packages use ESM-style ".js" specifiers that actually point at
     // ".ts" sources. tsc resolves those; webpack needs to be told.
