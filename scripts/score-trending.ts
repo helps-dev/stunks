@@ -10,6 +10,22 @@
  *   pnpm score:trending -- --window 48   compare two 48-hour windows instead
  *   pnpm score:trending -- --dry-run     rank and print, write nothing
  *
+ * IT READS AGGREGATES, NOT RAW TRADES.
+ *
+ * `volume_snapshots` is the only source that survives `prune:trades`, and that is not
+ * incidental — it is why the table carries `uniqueTraders` and the buy/sell split
+ * rather than just a total. Reading raw trades would make trending silently collapse
+ * the moment retention kicked in: the first version of this script did exactly that,
+ * and after a prune left six hours of raw trades a 24-hour window would have found
+ * almost nothing and scored every token at zero.
+ *
+ * ONE HONEST APPROXIMATION. `uniqueTraders` is summed across the hours in a window, so
+ * a wallet that traded in three of them counts three times. The true distinct count
+ * cannot be recovered from hourly rows — that information is gone once the trades are.
+ * It stays useful because the score NORMALISES against the cohort and every token is
+ * measured the same way, so the ranking holds even though the absolute number is an
+ * upper bound. It is trader-hours, not traders, and is not reported as anything else.
+ *
  * THE WINDOW IS ANCHORED TO THE DATA, NOT THE CLOCK.
  *
  * The score's largest component is volume acceleration: this window against the one
@@ -69,11 +85,16 @@ async function main(): Promise<void> {
   const prisma = getPrisma();
   const chainId = ROBINHOOD_CHAIN_ID;
 
+  // Anchored to the newest COMPLETE hour that has been rolled up, because that is the
+  // newest hour with a full set of aggregates behind it.
   const anchorRows = await prisma.$queryRaw<{ anchor: Date | null }[]>`
-    SELECT MAX(timestamp) AS anchor FROM trades WHERE "chainId" = ${chainId}`;
+    SELECT MAX("windowEnd") AS anchor FROM volume_snapshots`;
   const anchor = anchorRows[0]?.anchor;
   if (!anchor) {
-    console.log("No indexed trades, so nothing to rank.");
+    console.log(
+      "No volume snapshots, so there is nothing to rank.\n" +
+        "Run `pnpm rollup:aggregates -- --apply` first.",
+    );
     await prisma.$disconnect();
     return;
   }
@@ -94,48 +115,52 @@ async function main(): Promise<void> {
              ${anchor}::timestamptz - (${windowHours} * 2 || ' hours')::interval AS lo
     ),
     recent AS (
-      SELECT t."tokenId",
-             SUM(t."quoteAmount") AS volume,
-             COUNT(DISTINCT t."traderAddress") AS traders,
-             COUNT(*) AS trades,
-             SUM(t."quoteAmount") FILTER (WHERE t.side = 'BUY') AS buys,
-             SUM(t."quoteAmount") FILTER (WHERE t.side = 'SELL') AS sells
-      FROM trades t, bounds b
-      WHERE t."chainId" = ${chainId} AND t.timestamp > b.mid AND t.timestamp <= b.hi
-      GROUP BY t."tokenId"
+      SELECT v."tokenId",
+             SUM(v.volume)        AS volume,
+             SUM(v."buyVolume")   AS buys,
+             SUM(v."sellVolume")  AS sells,
+             SUM(v."tradeCount")  AS trades,
+             -- Summed across hours: trader-hours, an upper bound on distinct wallets.
+             -- The true count cannot be recovered from hourly rows. See the note above.
+             SUM(v."uniqueTraders") AS traders
+      FROM volume_snapshots v, bounds b
+      WHERE v."windowStart" >= b.mid AND v."windowStart" < b.hi
+      GROUP BY v."tokenId"
     ),
     prior AS (
-      SELECT t."tokenId", SUM(t."quoteAmount") AS volume
-      FROM trades t, bounds b
-      WHERE t."chainId" = ${chainId} AND t.timestamp > b.lo AND t.timestamp <= b.mid
-      GROUP BY t."tokenId"
+      SELECT v."tokenId", SUM(v.volume) AS volume
+      FROM volume_snapshots v, bounds b
+      WHERE v."windowStart" >= b.lo AND v."windowStart" < b.mid
+      GROUP BY v."tokenId"
     ),
-    prior_price AS (
-      SELECT DISTINCT ON (t."tokenId") t."tokenId", t.price
-      FROM trades t, bounds b
-      WHERE t."chainId" = ${chainId} AND t.timestamp <= b.mid
-      ORDER BY t."tokenId", t.timestamp DESC
+    prior_close AS (
+      SELECT DISTINCT ON (v."tokenId") v."tokenId", v."closePrice"
+      FROM volume_snapshots v, bounds b
+      WHERE v."windowStart" < b.mid
+      ORDER BY v."tokenId", v."windowStart" DESC
     )
-    SELECT r."tokenId"                                   AS "tokenId",
-           r.volume::text                                AS "recentVolume",
-           COALESCE(p.volume, 0)::text                   AS "priorVolume",
-           r.traders                                     AS "uniqueTraders",
-           r.trades                                      AS "tradeCount",
-           COALESCE(r.buys, 0)::text                     AS "buyVolume",
-           COALESCE(r.sells, 0)::text                    AS "sellVolume",
-           tok."marketCap"::text                         AS "marketCap",
-           COALESCE(div(pp.price * tok."totalSupply", 1000000000000000000000000000::numeric), 0)::text
-                                                         AS "priorMarketCap"
+    SELECT r."tokenId"                 AS "tokenId",
+           r.volume::text              AS "recentVolume",
+           COALESCE(p.volume, 0)::text AS "priorVolume",
+           r.traders                   AS "uniqueTraders",
+           r.trades                    AS "tradeCount",
+           r.buys::text                AS "buyVolume",
+           r.sells::text               AS "sellVolume",
+           tok."marketCap"::text       AS "marketCap",
+           COALESCE(
+             div(pc."closePrice" * tok."totalSupply", 1000000000000000000000000000::numeric),
+             0
+           )::text                     AS "priorMarketCap"
     FROM recent r
     JOIN tokens tok ON tok.id = r."tokenId"
     LEFT JOIN prior p ON p."tokenId" = r."tokenId"
-    LEFT JOIN prior_price pp ON pp."tokenId" = r."tokenId"
+    LEFT JOIN prior_close pc ON pc."tokenId" = r."tokenId"
     WHERE tok."moderationStatus" NOT IN ('HIDDEN', 'FLAGGED')`;
 
   console.log(`cohort        : ${rows.length} tokens traded in the recent window\n`);
   if (rows.length === 0) {
-    console.log("Nothing traded in that window. Widen it with --window, or wait for");
-    console.log("the indexer to catch up.");
+    console.log("No snapshots in that window. Widen it with --window, or run");
+    console.log("`pnpm rollup:aggregates -- --apply` to build more.");
     await prisma.$disconnect();
     return;
   }

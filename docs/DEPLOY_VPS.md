@@ -69,6 +69,37 @@ resumes exactly where it stopped rather than rescanning.
 
 Content was rephrased for compliance with licensing restrictions.
 
+## Keeping the database inside its size limit
+
+This chain produces about 27 MB of raw trade rows an hour (R42), so a 512 MB database
+holds roughly nineteen hours of them. Three commands, and **the order is enforced, not
+advisory**:
+
+```bash
+pnpm score:trending -- --apply      # 1. rank, so the exemption below has something to read
+pnpm rollup:aggregates -- --apply   # 2. collapse complete hours into candles + snapshots
+pnpm prune:trades -- --hours 6 --apply   # 3. delete the raw trades those cover
+```
+
+Measured on the live database, 2026-09-17: 436,491 trades occupying ~426 MB became
+15,241 candles and 15,241 snapshots occupying **12.5 MB** — a factor of roughly 34 — in
+5.3 seconds of rollup and 39 seconds of deletion.
+
+**Why step 1 comes first.** `prune:trades` exempts the top tokens by trending score, so
+that the ones people are about to look at keep their itemised history. With nothing
+scored, the exemption list is empty and it silently protects nothing. The script says so
+when that happens; it does not stop.
+
+**Why step 3 cannot outrun step 2.** `prune:trades` refuses to delete past the point the
+rollup has reached, and refuses outright when no candles exist. A trade no aggregate
+covers is the only copy of that history, and rebuilding it means re-reading the chain.
+
+Run them from cron once the pattern suits you. Both the rollup and the prune are
+resumable and safe to repeat: if the rollup runs out of room part way, prune what it has
+covered and run it again.
+
+---
+
 ## Requirements
 
 - Ubuntu 22.04 or 24.04. 2 vCPU, 4 GB RAM, 20 GB disk.
