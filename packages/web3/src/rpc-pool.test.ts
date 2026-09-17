@@ -248,6 +248,133 @@ describe("block range splitting", () => {
   });
 });
 
+describe("batch splitting", () => {
+  /**
+   * The failure this replaces cost more than the batching saved.
+   *
+   * dRPC's free plan takes 3 calls per POST; OrdoFi takes far more but was refusing
+   * everything. A batch of 23 therefore had one capable endpoint, and when it failed
+   * the pool raised BatchNotSupportedError — whose only answer, in the caller, was one
+   * request per item. Measured 2026-09-17: nine of ten curve windows fell back to
+   * roughly 25 sequential POSTs, which dominated the tick.
+   */
+  const call = (n: number) => ({ method: "eth_getBlockByNumber", params: [n] });
+
+  function poolWith(maxBatchSizes: Record<string, number>, onBatch: (n: number) => void) {
+    const fetchImpl = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { id: number }[];
+      onBatch(body.length);
+      return Promise.resolve(
+        jsonResponse(
+          body.map((entry) => ({ jsonrpc: "2.0", id: entry.id, result: "0x1" })),
+        ),
+      );
+    });
+    const pool = new RpcPool(Object.keys(maxBatchSizes), {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      attemptsPerEndpoint: 1,
+      sleep: noSleep,
+    });
+    // Stand in for limits the pool would otherwise learn from a rejection.
+    for (const endpoint of pool.stats()) {
+      const target = (
+        pool as unknown as { endpoints: { url: string; maxBatchSize: number | null }[] }
+      ).endpoints.find((e) => e.url === endpoint.url);
+      if (target) target.maxBatchSize = maxBatchSizes[endpoint.url]!;
+    }
+    return pool;
+  }
+
+  it("splits into chunks the pool can serve instead of refusing", async () => {
+    const sizes: number[] = [];
+    const pool = poolWith({ "https://small.example": 3 }, (n) => sizes.push(n));
+
+    const results = await pool.requestBatch<string>(
+      Array.from({ length: 8 }, (_, i) => call(i)),
+    );
+
+    expect(results).toHaveLength(8);
+    // 8 calls at 3 per POST: 3 + 3 + 2, not one POST of 8 and not 8 POSTs of one.
+    expect(sizes).toEqual([3, 3, 2]);
+  });
+
+  it("preserves the order of results across chunks", async () => {
+    const pool = new RpcPool(["https://small.example"], {
+      fetchImpl: vi.fn().mockImplementation((_u: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body)) as { id: number; params: number[] }[];
+        return Promise.resolve(
+          jsonResponse(
+            body.map((e) => ({ jsonrpc: "2.0", id: e.id, result: `v${e.params[0]}` })),
+          ),
+        );
+      }) as unknown as typeof fetch,
+      attemptsPerEndpoint: 1,
+      sleep: noSleep,
+    });
+    (
+      pool as unknown as { endpoints: { maxBatchSize: number | null }[] }
+    ).endpoints[0]!.maxBatchSize = 2;
+
+    const results = await pool.requestBatch<string>(
+      Array.from({ length: 5 }, (_, i) => call(i)),
+    );
+    expect(results).toEqual(["v0", "v1", "v2", "v3", "v4"]);
+  });
+
+  it("chunks onto a smaller endpoint after the capable one fails", async () => {
+    // The exact shape observed on 2026-09-17: dRPC's limit is known (3), OrdoFi's is
+    // not, so nothing is proven about the pool and the full batch is attempted. Only
+    // OrdoFi qualifies for it — and OrdoFi is the one failing. Without the fallback,
+    // dRPC never gets asked and the caller drops to one request per item.
+    const sizes: number[] = [];
+    const fetchImpl = vi.fn().mockImplementation((url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as { id: number }[];
+      if (url.includes("unknown")) {
+        return Promise.resolve(
+          jsonResponse(
+            body.map((e) => ({
+              jsonrpc: "2.0",
+              id: e.id,
+              error: { code: -32000, message: "the network is busy, please try again" },
+            })),
+          ),
+        );
+      }
+      sizes.push(body.length);
+      return Promise.resolve(
+        jsonResponse(body.map((e) => ({ jsonrpc: "2.0", id: e.id, result: "0x1" }))),
+      );
+    });
+
+    const pool = new RpcPool(["https://unknown.example", "https://small.example"], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      attemptsPerEndpoint: 1,
+      sleep: noSleep,
+    });
+    const endpoints = (
+      pool as unknown as { endpoints: { url: string; maxBatchSize: number | null }[] }
+    ).endpoints;
+    endpoints.find((e) => e.url.includes("small"))!.maxBatchSize = 3;
+    // The other stays null: not yet declared.
+
+    const results = await pool.requestBatch<string>(
+      Array.from({ length: 7 }, (_, i) => call(i)),
+    );
+
+    expect(results).toHaveLength(7);
+    // Served by the small endpoint in chunks, not abandoned.
+    expect(sizes).toEqual([3, 3, 1]);
+  });
+
+  it("sends one POST when an endpoint will take the whole batch", async () => {
+    const sizes: number[] = [];
+    const pool = poolWith({ "https://big.example": 100 }, (n) => sizes.push(n));
+
+    await pool.requestBatch<string>(Array.from({ length: 8 }, (_, i) => call(i)));
+    expect(sizes).toEqual([8]);
+  });
+});
+
 describe("adaptive log window", () => {
   it("halves on rejection and never goes below the floor", () => {
     const window = new AdaptiveLogWindow(100n, 10n, 10_000n);

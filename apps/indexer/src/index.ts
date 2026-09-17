@@ -77,8 +77,12 @@ async function main(): Promise<void> {
    * meant the factory's cheap successes kept widening the window that the curve
    * stream then choked on, and a curve rejection kept shrinking the factory's.
    */
-  const factorySource = new RpcLogSource(client as PublicClient, config.LOG_WINDOW);
-  const curveSource = new RpcLogSource(client as PublicClient, config.LOG_WINDOW);
+  // The pool is passed so `eth_getLogs` is sent with the topic filter actually
+  // intended. viem's `getLogs` drops a raw `topics` array and puts `"topics": []` on
+  // the wire, which a node reads as "no filter" — measured at 4,097 logs returned
+  // where 63 were wanted. See the note on RpcLogSource.
+  const factorySource = new RpcLogSource(client as PublicClient, config.LOG_WINDOW, pool);
+  const curveSource = new RpcLogSource(client as PublicClient, config.LOG_WINDOW, pool);
   // Multicall batches the contract reads; this removes the per-log block lookups
   // that multicall cannot help with. `eth_getBlockByNumber` is not a contract call, so
   // it goes through the pool's JSON-RPC batching instead — one POST per 100 blocks

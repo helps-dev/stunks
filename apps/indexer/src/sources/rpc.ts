@@ -1,5 +1,5 @@
-import type { Hex, PublicClient } from "viem";
-import { AdaptiveLogWindow, findRpcCallError } from "@stunks/web3";
+import { numberToHex, type Hex, type PublicClient } from "viem";
+import { AdaptiveLogWindow, findRpcCallError, type RpcPool } from "@stunks/web3";
 import type { Address } from "viem";
 import {
   RangeTooWideError,
@@ -17,6 +17,17 @@ import {
  * covers the same block range, so their union is complete and no block is skipped.
  */
 export const MAX_LOG_ADDRESSES_PER_QUERY = 1_000;
+
+/** The wire shape of a log, before hex fields are widened to bigint/number. */
+interface RawJsonRpcLog {
+  readonly address: Address;
+  readonly topics: Hex[];
+  readonly data: Hex;
+  readonly blockNumber: Hex | null;
+  readonly blockHash: Hex | null;
+  readonly transactionHash: Hex | null;
+  readonly logIndex: Hex | null;
+}
 
 /** Split an eth_getLogs address filter without changing its block range. */
 function addressChunks(
@@ -60,11 +71,57 @@ export class RpcLogSource implements LogSource {
   readonly name = "rpc";
   private readonly window: AdaptiveLogWindow;
 
+  /**
+   * `eth_getLogs` goes through the POOL, not through viem's `getLogs`.
+   *
+   * viem's `getLogs` derives the `topics` parameter from its own `event`/`events`
+   * options and ignores a raw `topics` array. Passing one produced `"topics": []` on
+   * the wire — captured directly from the transport — which a node reads as "no
+   * filter". The request then returns every log on the chain in the range, and the
+   * client-side filter below quietly discards the rest.
+   *
+   * Measured on 2026-09-17 over 100 blocks: the node returned 4,097 logs, of which 63
+   * were Pons curve events. 98.5% of the payload was downloaded and thrown away, on
+   * the one resource that constrains this indexer. The same query sent as raw
+   * JSON-RPC to the same endpoint returned 17 logs for a single topic, so the node
+   * was filtering correctly all along — it was never asked to.
+   *
+   * Going through the pool also keeps failover, health tracking and the non-JSON
+   * detection that a throttled endpoint's HTML error page needs.
+   */
   constructor(
     private readonly client: PublicClient,
     initialWindow = 100n,
+    private readonly pool?: RpcPool,
   ) {
     this.window = new AdaptiveLogWindow(initialWindow, 10n, 10_000n);
+  }
+
+  /** One `eth_getLogs` with the parameters actually intended. */
+  private async requestLogs(params: {
+    fromBlock: bigint;
+    toBlock: bigint;
+    addresses: readonly Address[];
+    topics0?: readonly Hex[];
+  }): Promise<readonly RawJsonRpcLog[]> {
+    const filter: Record<string, unknown> = {
+      fromBlock: numberToHex(params.fromBlock),
+      toBlock: numberToHex(params.toBlock),
+    };
+    if (params.addresses.length > 0) filter.address = [...params.addresses];
+    // Nested on purpose: position 0 of `topics` is topic0, and an array there is an
+    // OR over the values. `[a, b]` would instead mean "topic0 = a AND topic1 = b".
+    if (params.topics0 !== undefined && params.topics0.length > 0) {
+      filter.topics = [[...params.topics0]];
+    }
+
+    if (this.pool) return this.pool.request<RawJsonRpcLog[]>("eth_getLogs", [filter]);
+    // No pool supplied (tests, and any caller that only has a client). viem's
+    // `request` passes the parameters through untouched, unlike its `getLogs`.
+    return this.client.request({
+      method: "eth_getLogs",
+      params: [filter],
+    } as never) as Promise<RawJsonRpcLog[]>;
   }
 
   /** Current window size, so the scanner can persist it. */
@@ -95,9 +152,7 @@ export class RpcLogSource implements LogSource {
       // sequential requests (too slow) or nine simultaneous public-RPC bursts (too
       // throttle-prone).
       const chunks = addressChunks(query.addresses, query.topics0?.length ?? 0);
-      const chunkLogs = new Array<Awaited<ReturnType<PublicClient["getLogs"]>>>(
-        chunks.length,
-      );
+      const chunkLogs = new Array<readonly RawJsonRpcLog[]>(chunks.length);
       let nextChunk = 0;
       const readChunk = async (): Promise<void> => {
         for (;;) {
@@ -105,11 +160,11 @@ export class RpcLogSource implements LogSource {
           nextChunk += 1;
           const addresses = chunks[index];
           if (addresses === undefined) return;
-          chunkLogs[index] = await this.client.getLogs({
-            ...(addresses.length > 0 ? { address: [...addresses] } : {}),
-            ...(query.topics0 !== undefined ? { topics: [query.topics0] } : {}),
+          chunkLogs[index] = await this.requestLogs({
             fromBlock: query.fromBlock,
             toBlock,
+            addresses,
+            ...(query.topics0 !== undefined ? { topics0: query.topics0 } : {}),
           });
         }
       };
@@ -132,6 +187,11 @@ export class RpcLogSource implements LogSource {
               log.transactionHash !== null &&
               log.logIndex !== null,
           )
+          // Retained even though the node now filters. It costs one comparison per
+          // log and it is the thing that would have made the missing server-side
+          // filter visible as wasted bandwidth rather than as wrong data — the
+          // indexer stayed CORRECT throughout, just expensive. An endpoint that
+          // ignores `topics` again is contained here rather than in the processors.
           .filter(
             (log) =>
               query.topics0 === undefined ||
@@ -141,10 +201,11 @@ export class RpcLogSource implements LogSource {
             address: log.address,
             topics: log.topics,
             data: log.data,
-            blockNumber: log.blockNumber as bigint,
+            blockNumber: BigInt(log.blockNumber as Hex),
             blockHash: log.blockHash as Hex,
             transactionHash: log.transactionHash as Hex,
-            logIndex: log.logIndex as number,
+            // eslint-disable-next-line no-restricted-syntax -- a log index is a position, not an amount
+            logIndex: Number(BigInt(log.logIndex as Hex)),
           })),
         reachedBlock: toBlock,
       };

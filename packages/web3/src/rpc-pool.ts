@@ -412,6 +412,95 @@ export class RpcPool {
   async requestBatch<T>(calls: readonly RpcBatchCall[]): Promise<readonly T[]> {
     if (calls.length === 0) return [];
 
+    // No endpoint will take it whole: split it rather than fail.
+    //
+    // This was a hard failure, and the caller's only answer was one request per item.
+    // Measured on 2026-09-17: nine of ten curve windows ended with "block timestamp
+    // batching unavailable, falling back to single reads" — roughly 25 sequential
+    // POSTs per window, which dominated the tick and starved the stream of the very
+    // budget the batching exists to save.
+    //
+    // The two endpoints have very different limits: dRPC's free plan accepts 3 per
+    // POST, OrdoFi accepts far more but was refusing every getLogs-class request. So
+    // a batch of 23 had exactly one capable endpoint, and when that one failed the
+    // pool surrendered — while a perfectly healthy endpoint could have served it as
+    // eight POSTs of three. Eight is not one, but it is not twenty-three either.
+    const limit = this.provenBatchCeiling();
+    if (limit !== null && limit < calls.length) {
+      return this.requestBatchInChunks<T>(calls, limit);
+    }
+
+    try {
+      return await this.requestWholeBatch<T>(calls);
+    } catch (error) {
+      // The whole-batch attempt failed. An endpoint with a SMALLER known limit was
+      // excluded from that attempt and has not been asked at all — ask it in chunks
+      // before handing the caller a failure it can only answer one call at a time.
+      //
+      // This is the observed case, and it is why the pre-check alone is not enough:
+      // dRPC's limit is known (3) and OrdoFi's is not, so nothing is proven about the
+      // pool as a whole and the full batch is attempted. Only OrdoFi qualifies for
+      // it, OrdoFi is the endpoint that is failing, and dRPC — which could serve the
+      // work as several small POSTs — never gets a turn.
+      const fallback = this.bestKnownBatchLimit();
+      if (fallback !== null && fallback < calls.length) {
+        return this.requestBatchInChunks<T>(calls, fallback);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * The largest batch the pool is PROVEN to be unable to exceed.
+   *
+   * Null when any endpoint has not declared a limit, because an unknown limit is
+   * worth one attempt at full size rather than being assumed small.
+   */
+  private provenBatchCeiling(): number | null {
+    let best: number | null = null;
+    for (const endpoint of this.endpoints) {
+      if (endpoint.maxBatchSize === null) return null;
+      if (best === null || endpoint.maxBatchSize > best) best = endpoint.maxBatchSize;
+    }
+    return best;
+  }
+
+  /**
+   * The largest limit any endpoint has actually declared, ignoring those that have
+   * not. Used only after a full-size attempt has already failed.
+   */
+  private bestKnownBatchLimit(): number | null {
+    let best: number | null = null;
+    for (const endpoint of this.endpoints) {
+      if (endpoint.maxBatchSize === null) continue;
+      if (best === null || endpoint.maxBatchSize > best) best = endpoint.maxBatchSize;
+    }
+    return best;
+  }
+
+  /**
+   * Split into chunks the pool can actually serve, preserving order.
+   *
+   * Sequential on purpose: these chunks exist because an endpoint is already at its
+   * limit, and firing them concurrently is how a free endpoint starts returning HTML
+   * throttle pages instead of JSON.
+   */
+  private async requestBatchInChunks<T>(
+    calls: readonly RpcBatchCall[],
+    chunkSize: number,
+  ): Promise<readonly T[]> {
+    const size = Math.max(1, chunkSize);
+    const results: T[] = [];
+    for (let offset = 0; offset < calls.length; offset += size) {
+      const chunk = calls.slice(offset, offset + size);
+      results.push(...(await this.requestWholeBatch<T>(chunk)));
+    }
+    return results;
+  }
+
+  private async requestWholeBatch<T>(
+    calls: readonly RpcBatchCall[],
+  ): Promise<readonly T[]> {
     const label = `${calls[0]?.method ?? "batch"} (batch of ${calls.length})`;
     const failures: RpcCallError[] = [];
 

@@ -202,25 +202,29 @@ number never restricted a binding — and it is overridden to `0.0.0.0` only ins
 the container, where the `127.0.0.1:9464:9464` mapping does the same job.
 
 **If the curve stream is falling behind**, the constraint is the free public RPC
-endpoints, which both streams share. Measured on 2026-09-17, with both streams
-running: the factory needs ~9.9 blocks/second simply to keep pace with the chain,
-and the two free endpoints deliver roughly 12.8 blocks/second between them. The
-curve stream gets what is left, which is about 3 blocks/second — so a backlog of
-900,000 blocks does not shrink. That arithmetic is not something scheduling can
-fix.
+endpoints, which both streams share. The chain produces ~9.87 blocks/second; the
+curve stream currently sustains ~7.9. It is close to keeping pace and does not
+catch up on a ~900,000 block backlog.
 
-Before reaching for capacity, check the two failure modes that look identical to
-being slow but are not:
+Before reaching for capacity, check the failure modes that look identical to being
+slow but are not. Each of these was found here, and each was worth more than any
+amount of tuning:
 
-- **A stream frozen at one block** while the other advances. The checkpoint does
-  not move at all and `lastSuccessAt` is hours old. This was R34: one endpoint's
-  error string was classified as non-retryable, so the pool gave up without trying
-  the other. Fixed, and the taxonomy now fails in the retryable direction.
+- **A stream frozen at one block** while the other advances — the checkpoint does
+  not move at all and `lastSuccessAt` is hours old. R34: one endpoint's error
+  string fell into the fallback bucket, which was non-retryable, so the pool gave
+  up without trying a healthy endpoint.
 - **`log range narrowed, retrying` on a large share of ticks.** Each one scanned
-  nothing. This was R35: the sizer kept rediscovering a limit that had not moved.
-  Fixed; after a cold start expect about five narrowings per stream and then none.
+  nothing. R35: the sizer relearned a fixed limit every cycle. After a cold start
+  expect about five narrowings per stream, then none.
+- **`falling back to single reads`.** R38: a batch no single endpoint would take
+  was abandoned rather than split, turning one POST into ~25. Expect zero.
+- **Far more logs returned than the filter should allow.** R37: viem's `getLogs`
+  drops a raw `topics` array and sends `"topics": []`, so the node returned every
+  log on the chain — 4,097 where 63 were wanted. This one is invisible in the data,
+  which stays correct, and shows up only as cost.
 
-If neither applies, it is genuinely capacity. In order of effect:
+If none applies, it is genuinely capacity. In order of effect:
 
 1. **Use HyperSync for the backfill.** `BACKFILL_SOURCE=hypersync` with a free
    token from [app.envio.dev](https://app.envio.dev/api-tokens). RPC backfill of

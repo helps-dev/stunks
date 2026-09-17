@@ -872,3 +872,75 @@ the two free endpoints deliver roughly 12.8 blocks/second in total. The curve st
 therefore gets about 3 blocks/second and, being ~900,000 blocks behind, will not catch
 up. No scheduling change fixes that arithmetic. See **R3**: the backfill needs HyperSync
 or a paid endpoint.
+
+---
+
+## R37 — RESOLVED — The server-side topic filter was never sent
+
+The curve stream filters on seven Pons event signatures across every curve on the
+chain. It appeared to do so at the node. It did not.
+
+`RpcLogSource` called viem's `getLogs` with a raw `topics` array. viem derives that
+parameter from its own `event`/`events` options and ignores a raw one — captured
+directly off the transport, the request carried:
+
+```json
+{ "topics": [], "fromBlock": "0x3e31949", "toBlock": "0x3e31999" }
+```
+
+An empty `topics` means "no filter". The node returned **every log on the chain** in
+the range and a client-side `.filter()` discarded the rest.
+
+**Measured 2026-09-17, over 100 blocks:** 4,097 logs returned, 63 of them Pons curve
+events. **98.5% of the payload was downloaded and thrown away**, on the single resource
+that constrains this indexer. The same query as raw JSON-RPC to the same endpoint
+returned 17 logs for one topic — the node had been filtering correctly all along. It
+was never asked to.
+
+**Why it was invisible.** The indexer stayed _correct_ the whole time, because the
+client-side filter did the work. Only throughput suffered, and throughput was already
+known to be bad for other reasons, so it had a ready explanation. The unit tests passed
+because they asserted the arguments handed to `getLogs`, not what left the process.
+
+**Fix.** `eth_getLogs` goes through `RpcPool.request` with parameters built explicitly,
+including the nested `topics: [[...]]` form that means "topic0 is any of these". The
+tests now assert the JSON-RPC parameters themselves. The client-side filter is kept as
+defence in depth against an endpoint that ignores `topics`.
+
+---
+
+## R38 — RESOLVED — A batch no single endpoint could take was abandoned entirely
+
+`RpcPool.requestBatch` sent a batch only to endpoints whose known `maxBatchSize` was at
+least the batch size. If none qualified, or if the qualifying ones failed, it raised
+`BatchNotSupportedError` — and the caller's only answer was one request per item.
+
+The two endpoints have very different limits: dRPC's free plan takes 3 calls per POST,
+OrdoFi takes far more but was refusing everything. So a 23-call block-timestamp batch
+had exactly one capable endpoint, that endpoint was the failing one, and dRPC — which
+could have served the work as eight small POSTs — was never asked.
+
+**Measured 2026-09-17:** nine of ten curve windows logged _"block timestamp batching
+unavailable, falling back to single reads"_, roughly 25 sequential POSTs per window.
+That dominated the tick and consumed the very budget the batching exists to save.
+
+**Fix.** The pool splits into chunks the pool can actually serve, sequentially so a
+free endpoint is not burst. Two conditions, and both are needed: skip the full-size
+attempt when every endpoint has a known limit below it, and after a full-size attempt
+fails, fall back to the largest limit any endpoint has declared. The first alone was
+not enough — with dRPC's limit known and OrdoFi's unknown, nothing is proven about the
+pool, so the full batch is attempted, only OrdoFi qualifies, and it is the one failing.
+
+**Effect, combined with R34, R35 and R37:**
+
+|                     | curve stream                            |
+| ------------------- | --------------------------------------- |
+| frozen (R34)        | 0 blocks/second                         |
+| after R34           | ~4.0 blocks/second                      |
+| after R35, R37, R38 | **~7.9 blocks/second**                  |
+| timestamp fallbacks | 9 of 10 windows → **0 of 39**           |
+| window narrowings   | ~1 tick in 4 → 10 at startup, then none |
+
+The chain produces ~9.87 blocks/second, so the stream is close to keeping pace but
+still does not catch up on a ~900,000 block backlog. See **R3**: that remains a
+capacity problem, not a code one.
