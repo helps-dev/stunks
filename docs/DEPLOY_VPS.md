@@ -1,4 +1,11 @@
-# Deploying STUNKS.FUN to a VPS
+# Deploying STUNKS.FUN
+
+Three shapes, and they are not interchangeable:
+
+- **Path A — systemd**, both halves on one VPS. Recommended for a single box.
+- **Path B — Docker Compose**, both halves on one VPS behind Caddy.
+- **Path C — indexer on a VPS, web app on Vercel.** Different enough to have its own
+  section: nothing in `deploy/Caddyfile` is in the request path.
 
 Two processes, one hosted Postgres. The web app serves the site, the indexer writes the
 chain into the database, and nothing else holds state.
@@ -188,6 +195,109 @@ docker compose --profile public up -d --build    # ...plus HTTPS on 80/443
 
 The schema still has to be applied once, from the host or any machine with the repo:
 `pnpm prisma:deploy`.
+
+## Path C — indexer on a VPS, web app on Vercel
+
+This splits the two halves across providers, and it is a different shape from Paths A
+and B rather than a variation of them. The things to get right are the ones that stop
+being true when Caddy is no longer in the request path.
+
+### The web app on Vercel
+
+**Root directory.** The app imports the brand assets from the monorepo root
+(`../../../../Asset/banner-stunks.png`) and depends on six workspace packages that ship
+TypeScript source rather than a build artefact. A project whose Root Directory is
+`apps/web` uploads only that folder and the build fails on the first import. Either:
+
+- set Root Directory to the repository root and Build Command to
+  `pnpm --filter @stunks/web build`, or
+- keep `apps/web` and enable **Include source files outside of the Root Directory in
+  the Build Step**.
+
+`prisma generate` already runs as part of `@stunks/web`'s build script, so the client is
+generated during the build rather than expected in the repository.
+
+**Environment variables.** The `NEXT_PUBLIC_*` values are compiled into the browser
+bundle, so they are needed at BUILD time and changing one requires a redeploy — setting
+it in the dashboard is not enough on its own:
+
+| variable                      | when    | notes                              |
+| ----------------------------- | ------- | ---------------------------------- |
+| `NEXT_PUBLIC_CHAIN_ID`        | build   | `4663`                             |
+| `NEXT_PUBLIC_PONS_V2_FACTORY` | build   | the verified factory address       |
+| `NEXT_PUBLIC_RPC_ENDPOINTS`   | build   | also becomes the CSP `connect-src` |
+| `NEXT_PUBLIC_APP_URL`         | build   | the real domain                    |
+| `DATABASE_URL`                | runtime | the POOLED Neon host               |
+
+`DIRECT_URL` is only used by `prisma migrate`, so Vercel does not need it. Run
+migrations from the VPS or a laptop, not from a build.
+
+**The CSP is built from `NEXT_PUBLIC_RPC_ENDPOINTS`.** `apps/web/next.config.mjs`
+derives `connect-src` from the same variable the wallet client reads, so the two cannot
+drift. The consequence is that adding an RPC endpoint needs a **redeploy**: an endpoint
+the CSP does not name is blocked by the browser, and the only symptom is a console
+message.
+
+**Security headers travel with the app.** They used to live only in `deploy/Caddyfile`,
+which is not in the request path here — this deployment would have shipped with no CSP,
+no `X-Frame-Options` and no `Referrer-Policy`. They are now set in `next.config.mjs` and
+apply wherever the app runs. The Caddyfile no longer repeats them, because a browser
+intersects two CSP headers and that is a confusing way to find out one was wrong.
+
+**What Vercel does not give you.** The rate limiting discussed under Path B lives in
+Caddy and is not in this path. Every page is `force-dynamic`, so each request is a
+function invocation that reaches Neon and, on the landing page, the chain. Use Vercel's
+own firewall or accept that a refresh loop competes with the indexer for the same free
+RPC budget.
+
+**The protocol cache is per instance.** `apps/web/src/lib/read-chain.ts` holds the Pons
+address graph and factory parameters for 60 seconds in module scope. On one long-lived
+server that is one read per minute; on serverless each instance keeps its own copy and
+cold starts miss, so expect a lower hit rate. It is still correct — the head block is
+always read fresh and `protocolReadAt` reports the age — just less effective.
+
+### The indexer on the VPS
+
+Only the indexer runs there, so most of Path B does not apply. Follow Path A and skip
+the `stunks-web` service, or with Docker start the one service:
+
+```bash
+docker compose up -d --build indexer
+```
+
+`HEALTH_HOST` stays `127.0.0.1`. Read it over SSH:
+
+```bash
+curl http://127.0.0.1:9464/health
+```
+
+Do not open 9464 to reach it from Vercel. It reports checkpoints, RPC URLs and failure
+counts with no authentication in front of it, and nothing in the web app consumes it.
+
+### What both halves share
+
+The database, and the region decision at the top of this document still applies — but
+it applies to the **VPS**, which does the heavy writing. Vercel's functions read; the
+indexer writes continuously and a cross-region round trip costs it far more.
+
+### Order of operations on the first deploy
+
+`PRICE_SCALE` changed from 1e18 to 1e27 (R40). The recompute has to happen while
+nothing is writing, so:
+
+```bash
+# on the VPS
+sudo systemctl stop stunks-indexer
+pnpm recompute:prices -- --dry-run
+pnpm recompute:prices -- --apply
+sudo systemctl start stunks-indexer
+```
+
+Deploying the web app before that is harmless — it only reads. Starting the NEW indexer
+before that is not: it writes 1e27 prices into a table of 1e18 ones, and the two are
+indistinguishable afterwards.
+
+---
 
 ## HTTPS and a domain
 

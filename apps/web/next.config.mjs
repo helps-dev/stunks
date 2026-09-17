@@ -1,6 +1,81 @@
+/**
+ * Security headers, defined here rather than at the front door.
+ *
+ * They were only in deploy/Caddyfile, which assumes the app is served behind Caddy on
+ * the same VPS as the indexer. It is not always: hosting the app on Vercel puts no
+ * Caddy in the request path, and the app would have shipped with no CSP, no
+ * X-Frame-Options and no Referrer-Policy at all.
+ *
+ * Defining them in the app means they travel with it wherever it runs. The Caddyfile
+ * no longer repeats them — two CSP headers are intersected by the browser, which is a
+ * confusing way to discover that one of them was wrong.
+ *
+ * The threat is specific. This page constructs the transactions a wallet is asked to
+ * sign. Script that should not be running — arriving through a compromised dependency,
+ * or anything that reaches the DOM — can rewrite the `to`, `data` and `value`, and the
+ * wallet will faithfully present whatever it is handed. The CSP is what stops such
+ * script loading from somewhere else or exfiltrating to it.
+ */
+function securityHeaders() {
+  // connect-src is derived from the SAME variable the wallet client reads, so an
+  // endpoint added to one cannot be silently missing from the other. Getting this
+  // wrong fails in the browser with nothing but a console message.
+  const rpcOrigins = (process.env.NEXT_PUBLIC_RPC_ENDPOINTS ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      try {
+        return new URL(entry).origin;
+      } catch {
+        return null;
+      }
+    })
+    .filter((origin) => origin !== null);
+
+  const csp = [
+    "default-src 'self'",
+    // 'unsafe-inline' is required by the App Router, which emits inline bootstrap and
+    // streaming-payload scripts. Removing it needs nonces threaded through middleware,
+    // which is worth doing and is not free.
+    "script-src 'self' 'unsafe-inline'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    `connect-src 'self' ${rpcOrigins.join(" ")}`.trim(),
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "object-src 'none'",
+    "upgrade-insecure-requests",
+  ].join("; ");
+
+  return [
+    { key: "Content-Security-Policy", value: csp },
+    { key: "X-Content-Type-Options", value: "nosniff" },
+    { key: "X-Frame-Options", value: "DENY" },
+    { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+    { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+    {
+      // Nothing here needs a camera, a microphone, a location or a payment handler.
+      key: "Permissions-Policy",
+      value:
+        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+    },
+    {
+      // Harmless over plain HTTP in local development; browsers ignore it there.
+      key: "Strict-Transport-Security",
+      value: "max-age=31536000; includeSubDomains",
+    },
+  ];
+}
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  async headers() {
+    return [{ source: "/:path*", headers: securityHeaders() }];
+  },
   // Workspace packages ship TypeScript source rather than a build artefact, so Next
   // has to transpile them. This keeps the packages free of a build step.
   transpilePackages: [

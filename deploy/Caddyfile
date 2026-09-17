@@ -46,37 +46,12 @@
 	# }
 
 	header {
-		# The app is a wallet dApp: only the user's own wallet signs, and no session
-		# cookie exists to steal. These still cut off the cheap attacks.
-		Strict-Transport-Security "max-age=31536000; includeSubDomains"
-		X-Content-Type-Options "nosniff"
-		X-Frame-Options "DENY"
-		Referrer-Policy "strict-origin-when-cross-origin"
+		# Security headers are set by the APP, in apps/web/next.config.mjs, so they
+		# apply wherever it is served — including on Vercel, where nothing in this file
+		# is in the request path. Repeating them here would mean two CSP headers, which
+		# a browser intersects: a confusing way to find out one of them was wrong.
+		#
+		# Only what belongs to the front door stays.
 		-Server
-
-		# ── Content-Security-Policy ───────────────────────────────────────────────
-		#
-		# The threat this addresses is specific, not generic. A wallet dApp asks the
-		# user to sign transactions that this page constructs. Script that should not
-		# be running — injected through a compromised dependency, or anything that
-		# reaches the DOM — can rewrite the `to`, `data` and `value` the wallet is
-		# handed, and the wallet will faithfully present whatever it is given. A CSP
-		# is what stops such script loading from somewhere else or exfiltrating to it.
-		#
-		# 'unsafe-inline' on script-src is required by Next's App Router, which emits
-		# inline bootstrap and streaming-payload scripts. Removing it needs nonces
-		# threaded through a middleware, which is worth doing and is not free.
-		#
-		# connect-src is deliberately narrow: 'self' for this app's own routes plus
-		# the RPC endpoints. It must be kept in step with NEXT_PUBLIC_RPC_ENDPOINTS —
-		# an endpoint added there and not here will fail in the browser with no
-		# explanation beyond a console message.
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://robinhood.drpc.org https://rpc.ordofi.network https://rpc.mainnet.chain.robinhood.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests"
-
-		# Nothing here needs a camera, a microphone, a location or a payment handler.
-		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
-
-		# Same intent as frame-ancestors above, for anything that predates CSP2.
-		Cross-Origin-Opener-Policy "same-origin"
 	}
 }
