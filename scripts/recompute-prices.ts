@@ -79,6 +79,16 @@ const PRICE_SQL = Prisma.sql`
 /** Rows re-checked in TypeScript after the SQL has run. */
 const VERIFY_SAMPLE = 5_000;
 
+/**
+ * Rows rewritten between VACUUMs.
+ *
+ * Sized against free space, not speed. Each row updated needs room for a second
+ * version until the dead one is reclaimed, so the chunk has to fit in whatever the
+ * project has spare — about 20 MB here, against roughly 1 KB per trade row including
+ * its indexes.
+ */
+const CHUNK = 20_000;
+
 function has(flag: string): boolean {
   return process.argv.includes(`--${flag}`);
 }
@@ -130,7 +140,14 @@ async function main(): Promise<void> {
   const chainId = ROBINHOOD_CHAIN_ID;
 
   const total = await prisma.trade.count({ where: { chainId } });
-  console.log(`trades in scope: ${total}\n`);
+  console.log(`trades in scope: ${total}`);
+
+  // Stated up front, because on a size-capped project this is the number that decides
+  // whether the run can finish at all.
+  const sizeRows = await prisma.$queryRaw<{ size: string; bytes: bigint }[]>`
+    SELECT pg_size_pretty(pg_database_size(current_database())) AS size,
+           pg_database_size(current_database()) AS bytes`;
+  console.log(`database size  : ${sizeRows[0]?.size ?? "unknown"}\n`);
 
   // How many rows disagree with the formula, before touching anything.
   const wrongRows = await prisma.$queryRaw<{ wrong: bigint }[]>`
@@ -181,11 +198,49 @@ async function main(): Promise<void> {
   // value is floor, so this matches `mulDiv` in @stunks/utils exactly. The scale is
   // written out in full rather than as 1e27, which would be a float literal and would
   // put a float in the middle of a money path.
-  console.log("  rewriting trade prices in one statement...");
+  // In chunks, with a VACUUM between them, because the database is nearly full.
+  //
+  // Postgres never overwrites a row in place: an UPDATE writes a NEW version and marks
+  // the old one dead. Rewriting 431,233 prices at once therefore needs room for a
+  // second copy of most of the table, and this Neon project is at 492 MB of a 512 MB
+  // limit — the single-statement version failed outright with
+  //
+  //   53100: could not extend file because project size limit (512 MB) has been exceeded
+  //
+  // VACUUM does not return space to the operating system, but it does mark dead rows
+  // reusable, so the next chunk writes into the room the previous one just freed. That
+  // turns "needs 100+ MB free" into "needs one chunk's worth", which fits.
+  console.log(`  rewriting trade prices in chunks of ${CHUNK}...`);
   const startedTrades = Date.now();
-  const tradesWritten = await prisma.$executeRaw`
-    UPDATE trades SET price = ${PRICE_SQL}
-    WHERE "chainId" = ${chainId} AND price <> ${PRICE_SQL}`;
+  let tradesWritten = 0;
+  for (;;) {
+    const written = await prisma.$executeRaw`
+      UPDATE trades SET price = ${PRICE_SQL}
+      WHERE id IN (
+        SELECT id FROM trades
+        WHERE "chainId" = ${chainId} AND price <> ${PRICE_SQL}
+        LIMIT ${CHUNK}
+      )`;
+    if (written === 0) break;
+    tradesWritten += written;
+    // Cannot run inside a transaction, which is why this is its own statement.
+    try {
+      await prisma.$executeRawUnsafe("VACUUM trades");
+    } catch (error) {
+      console.error(
+        `\n  VACUUM failed: ${error instanceof Error ? error.message : String(error)}\n` +
+          "  Without it the next chunk will run out of space on a size-capped project.\n" +
+          "  Stopping here. Whatever was written is correct and the run resumes from\n" +
+          "  where it stopped — nothing needs undoing.",
+      );
+      process.exitCode = 1;
+      await prisma.$disconnect();
+      return;
+    }
+    console.log(
+      `    ${tradesWritten}/${wrong} (${((Date.now() - startedTrades) / 1000).toFixed(0)}s)`,
+    );
+  }
   console.log(
     `  ${tradesWritten} trade rows in ${((Date.now() - startedTrades) / 1000).toFixed(1)}s\n`,
   );
