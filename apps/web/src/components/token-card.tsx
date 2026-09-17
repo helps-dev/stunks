@@ -46,6 +46,11 @@ export function TokenCard({ token }: { token: SerialisedToken }) {
       href={`/token/${token.address}`}
       className="card"
       aria-label={`Open ${token.symbol}`}
+      data-reveal
+      // Staggered across a row of three so a grid arrives as rows rather than all at
+      // once. Derived from the symbol so it is stable between renders — an index would
+      // restart at zero on every page of results and make later pages look wrong.
+      data-reveal-delay={String((token.symbol.charCodeAt(0) % 3) + 1)}
     >
       <div className="card-head">
         <div className="card-title">

@@ -2657,3 +2657,53 @@ table.compact td {
   line-height: 1.55;
   color: var(--muted);
 }
+
+/* ── scroll reveal ───────────────────────────────────────────────────────────
+ *
+ * Opt in with `data-reveal`; stagger a row with `data-reveal-delay="1".."5"`.
+ *
+ * The hidden state is scoped to `html.reveal-ready`, which ONLY the ScrollReveal
+ * component sets. Without JavaScript, without IntersectionObserver, or with reduced
+ * motion requested, none of this applies and every element is simply visible. The
+ * animation is what script adds, never what it takes away — hiding by default and
+ * revealing with script turns any failure into a blank page.
+ */
+.reveal-ready [data-reveal] {
+  opacity: 0;
+  transform: translateY(14px);
+}
+
+.reveal-ready [data-reveal].is-revealed {
+  opacity: 1;
+  transform: none;
+  /* Eased out, not linear: it should settle rather than arrive. */
+  transition:
+    opacity 0.55s cubic-bezier(0.22, 0.61, 0.36, 1),
+    transform 0.55s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* Stagger, so a row of cards arrives as a row rather than all at once. Kept short —
+ * anything past ~250ms reads as the page being slow. */
+.reveal-ready [data-reveal-delay="1"].is-revealed {
+  transition-delay: 60ms;
+}
+.reveal-ready [data-reveal-delay="2"].is-revealed {
+  transition-delay: 120ms;
+}
+.reveal-ready [data-reveal-delay="3"].is-revealed {
+  transition-delay: 180ms;
+}
+.reveal-ready [data-reveal-delay="4"].is-revealed {
+  transition-delay: 240ms;
+}
+
+/* Belt and braces. The component already bails out on this, but a media query also
+ * covers the setting being changed while the page is open. */
+@media (prefers-reduced-motion: reduce) {
+  .reveal-ready [data-reveal],
+  .reveal-ready [data-reveal].is-revealed {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+}

@@ -78,7 +78,7 @@ export default async function ExplorePage({ searchParams }: PageProps) {
 
   return (
     <main className="explore-page">
-      <section className="explore-hero">
+      <section className="explore-hero" data-reveal>
         <p className="page-kicker">Market discovery</p>
         <h1>
           Find your next
@@ -165,7 +165,7 @@ export default async function ExplorePage({ searchParams }: PageProps) {
         </div>
       )}
 
-      <section className="explore-browse">
+      <section className="explore-browse" data-reveal>
         <div className="section-heading">
           <div>
             <p className="page-kicker">Browse live index</p>

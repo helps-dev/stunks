@@ -258,7 +258,7 @@ export default async function Page() {
       </section>
 
       <div className="home-content">
-        <section className="feature-grid" aria-label="STUNKS capabilities">
+        <section className="feature-grid" aria-label="STUNKS capabilities" data-reveal>
           <article className="panel feature-card">
             <span className="feature-icon">↗</span>
             <h3>Launch</h3>
@@ -289,7 +289,7 @@ export default async function Page() {
           </article>
         </section>
 
-        <section className="home-grid" style={{ marginTop: 16 }}>
+        <section className="home-grid" style={{ marginTop: 16 }} data-reveal>
           <div className="home-section-card">
             <div className="home-section-header">
               <h2>Trending tokens</h2>
@@ -383,7 +383,7 @@ export default async function Page() {
           </aside>
         </section>
 
-        <section className="protocol-disclosure">
+        <section className="protocol-disclosure" data-reveal>
           <details>
             <summary>Protocol telemetry and source-of-truth details</summary>
             {snapshot.ok && telemetry ? (
