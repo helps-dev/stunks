@@ -9,7 +9,8 @@
   },
   "scripts": {
     "build": "turbo run build",
-    "typecheck": "turbo run typecheck",
+    "typecheck": "turbo run typecheck && pnpm typecheck:scripts",
+    "typecheck:scripts": "tsc --noEmit -p tsconfig.json",
     "lint": "turbo run lint",
     "test": "turbo run test",
     "test:integration": "turbo run test:integration",
@@ -41,6 +42,7 @@
     "turbo": "2.3.3",
     "typescript": "5.7.2",
     "typescript-eslint": "8.18.1",
+    "viem": "2.21.55",
     "vitest": "2.1.8"
   },
   "pnpm": {

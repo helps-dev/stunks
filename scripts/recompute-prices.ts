@@ -45,6 +45,8 @@ import {
 } from "../apps/indexer/src/pricing.js";
 
 const BATCH = 2_000;
+/** How often to print a progress line. Every batch would be noisy; never is worse. */
+const PROGRESS_EVERY = 20_000;
 
 function has(flag: string): boolean {
   return process.argv.includes(`--${flag}`);
@@ -65,6 +67,7 @@ async function main(): Promise<void> {
   const total = await prisma.trade.count({ where: { chainId: ROBINHOOD_CHAIN_ID } });
   console.log(`trades to examine: ${total}\n`);
 
+  const startedAt = Date.now();
   let seen = 0;
   let changed = 0;
   let zeroBefore = 0;
@@ -102,9 +105,18 @@ async function main(): Promise<void> {
       }
     }
 
-    process.stdout.write(`\r  examined ${seen}/${total}  to change: ${changed}`);
+    // Newline-terminated, not a \r progress bar. This is a long unattended pass over
+    // hundreds of thousands of rows, so it is run with nohup or under a service and
+    // its output is redirected — where a carriage-return bar buffers into nothing and
+    // the operator cannot tell a slow run from a hung one.
+    if (seen % PROGRESS_EVERY < BATCH) {
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      console.log(
+        `  examined ${seen}/${total}  to change: ${changed}  (${elapsed}s elapsed)`,
+      );
+    }
   }
-  console.log("\n");
+  console.log("");
   console.log(`  trades needing a new price : ${changed}`);
   console.log(`  of which stored zero       : ${zeroBefore}`);
   console.log(`  zero -> a real price       : ${rescuedFromZero}\n`);
@@ -114,8 +126,14 @@ async function main(): Promise<void> {
     where: { chainId: ROBINHOOD_CHAIN_ID },
     select: { id: true, symbol: true, price: true, totalSupply: true },
   });
+  console.log(`\n  restating ${tokens.length} token prices from their latest trade`);
   let tokensChanged = 0;
+  let tokensSeen = 0;
   for (const token of tokens) {
+    tokensSeen += 1;
+    if (tokensSeen % 5_000 === 0) {
+      console.log(`  tokens ${tokensSeen}/${tokens.length}  to change: ${tokensChanged}`);
+    }
     const latest = await prisma.trade.findFirst({
       where: { tokenId: token.id },
       orderBy: [{ blockNumber: "desc" }, { logIndex: "desc" }],

@@ -42,6 +42,9 @@ importers:
       typescript-eslint:
         specifier: 8.18.1
         version: 8.18.1(eslint@9.17.0)(typescript@5.7.2)
+      viem:
+        specifier: 2.21.55
+        version: 2.21.55(bufferutil@4.1.0)(typescript@5.7.2)(utf-8-validate@5.0.10)(zod@3.24.1)
       vitest:
         specifier: 2.1.8
         version: 2.1.8(@types/node@22.10.2)
@@ -5166,8 +5169,8 @@ snapshots:
   ox@0.1.2(typescript@5.7.2)(zod@3.24.1):
     dependencies:
       '@adraffy/ens-normalize': 1.11.1
-      '@noble/curves': 1.7.0
-      '@noble/hashes': 1.6.1
+      '@noble/curves': 1.9.7
+      '@noble/hashes': 1.8.0
       '@scure/bip32': 1.6.0
       '@scure/bip39': 1.5.0
       abitype: 1.0.7(typescript@5.7.2)(zod@3.24.1)
@@ -5777,8 +5780,8 @@ snapshots:
 
   webauthn-p256@0.0.10:
     dependencies:
-      '@noble/curves': 1.7.0
-      '@noble/hashes': 1.6.1
+      '@noble/curves': 1.9.7
+      '@noble/hashes': 1.8.0
 
   webextension-polyfill@0.10.0: {}
 
