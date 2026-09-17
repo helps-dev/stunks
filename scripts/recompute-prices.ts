@@ -41,235 +41,189 @@
  * This is a long, write-heavy pass over every trade. Run it deliberately.
  */
 
-import { getPrisma, toDecimal, toBigInt } from "@stunks/database";
+import { Prisma } from "@prisma/client";
+import { getPrisma } from "@stunks/database";
 import { ROBINHOOD_CHAIN_ID } from "@stunks/config";
-import {
-  PRICE_SCALE,
-  marketCapFromPrice,
-  priceFromTrade,
-} from "../apps/indexer/src/pricing.js";
+import { PRICE_SCALE, priceFromTrade } from "../apps/indexer/src/pricing.js";
 
-const BATCH = 2_000;
 /**
- * In-flight updates. High enough to hide the round trip, low enough to stay well
- * inside a pooled connection allowance and leave room for the indexer.
+ * The price scale, written out in full.
+ *
+ * NOT `1e27`: that is a float8 literal in Postgres, and a float has no place anywhere
+ * near a money column in this project. Spelled out and cast, it stays `numeric`, which
+ * Postgres computes exactly at arbitrary precision.
  */
-const WRITE_CONCURRENCY = 24;
+const SCALE_SQL = Prisma.sql`1000000000000000000000000000::numeric`;
 
-/** Run `task` over `items`, never more than `limit` at once. Preserves no order. */
-async function runConcurrently<T>(
-  items: readonly T[],
-  limit: number,
-  task: (item: T) => Promise<unknown>,
-): Promise<void> {
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    for (;;) {
-      const index = next;
-      next += 1;
-      const item = items[index];
-      if (item === undefined) return;
-      await task(item);
-    }
-  };
-  await Promise.all(
-    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
-  );
-}
-/** How often to print a progress line. Every batch would be noisy; never is worse. */
-const PROGRESS_EVERY = 20_000;
+/**
+ * `priceFromTrade`, expressed in SQL.
+ *
+ * Mirrors the TypeScript exactly: zero when either leg is zero, otherwise
+ * floor(quote * SCALE / token).
+ *
+ * `div(a, b)` and NOT `trunc(a / b)`. Postgres evaluates `numeric / numeric` to a
+ * limited number of digits and ROUNDS there, so a true quotient of 1234.9999… becomes
+ * 1235.000 and `trunc` then returns 1235 instead of 1234. Checked against
+ * `priceFromTrade` over 5,000 real rows, the rounding version disagreed on 1,132 of
+ * them. `div` is integer division and truncates, which is what Solidity does and what
+ * `mulDiv` in @stunks/utils reproduces.
+ *
+ * A second implementation is a second thing to get wrong, so the run verifies its
+ * output against the real function afterwards rather than assuming these agree.
+ */
+const PRICE_SQL = Prisma.sql`
+  CASE WHEN "tokenAmount" > 0 AND "quoteAmount" > 0
+       THEN div("quoteAmount" * ${SCALE_SQL}, "tokenAmount")
+       ELSE 0 END`;
+
+/** Rows re-checked in TypeScript after the SQL has run. */
+const VERIFY_SAMPLE = 5_000;
 
 function has(flag: string): boolean {
   return process.argv.includes(`--${flag}`);
 }
 
 /**
- * `--limit N` stops after N trades and skips the token pass.
+ * Compare what the SQL produces against `priceFromTrade` over a sample of real rows.
  *
- * A trial run, and it exists because the write path here was twice changed and twice
- * shipped without ever having executed — the second attempt hung against a pooled
- * connection and wrote nothing at all, which a dry run cannot reveal because a dry run
- * writes nothing by definition. A hundred rows proves the writes land in seconds, and
- * the script is idempotent, so the trial is simply part of the real run.
+ * Postgres is asked to evaluate the expression without writing it, so this is safe to
+ * run before a migration as well as after. Returns false on any disagreement.
  */
-function limit(): number | null {
-  const index = process.argv.indexOf("--limit");
-  if (index === -1) return null;
-  const raw = process.argv[index + 1];
-  // eslint-disable-next-line no-restricted-syntax -- a row count is not money
-  const parsed = Number(raw);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    console.error(`--limit needs a positive whole number, got: ${raw ?? "(nothing)"}`);
-    process.exit(1);
+async function verifyAgainstTypeScript(
+  prisma: ReturnType<typeof getPrisma>,
+  chainId: number,
+): Promise<boolean> {
+  const rows = await prisma.$queryRaw<
+    { sql_price: string; quote: string; token: string }[]
+  >`
+    SELECT ${PRICE_SQL}::text AS sql_price,
+           "quoteAmount"::text AS quote,
+           "tokenAmount"::text AS token
+    FROM trades WHERE "chainId" = ${chainId}
+    ORDER BY id ASC LIMIT ${VERIFY_SAMPLE}`;
+
+  let mismatches = 0;
+  for (const row of rows) {
+    const expected = priceFromTrade({
+      quoteAmount: BigInt(row.quote.split(".")[0] ?? "0"),
+      tokenAmount: BigInt(row.token.split(".")[0] ?? "0"),
+    });
+    if (BigInt(row.sql_price.split(".")[0] ?? "0") !== expected) mismatches += 1;
   }
-  return parsed;
+  console.log(
+    `  formula check: ${rows.length} rows, ${mismatches} disagreement(s) with priceFromTrade`,
+  );
+  return mismatches === 0;
 }
 
 async function main(): Promise<void> {
   const apply = has("apply");
   const dryRun = has("dry-run") || !apply;
-  const maxRows = limit();
 
   if (!apply && !has("dry-run")) {
     console.log("No mode given; defaulting to --dry-run. Pass --apply to write.\n");
   }
   console.log(`mode: ${dryRun ? "DRY RUN — nothing is written" : "APPLY"}`);
-  if (maxRows !== null) {
-    console.log(`limit: ${maxRows} trades, and the token pass is skipped`);
-  }
   console.log(`target scale: 1e${PRICE_SCALE.toString().length - 1}\n`);
 
   const prisma = getPrisma();
+  const chainId = ROBINHOOD_CHAIN_ID;
 
-  const total = await prisma.trade.count({ where: { chainId: ROBINHOOD_CHAIN_ID } });
-  console.log(`trades to examine: ${total}\n`);
+  const total = await prisma.trade.count({ where: { chainId } });
+  console.log(`trades in scope: ${total}\n`);
 
-  const startedAt = Date.now();
-  /** Accumulated per batch, flushed as one transaction. */
-  const pendingWrites: { id: string; price: bigint }[] = [];
-  let seen = 0;
-  let changed = 0;
-  let zeroBefore = 0;
-  let rescuedFromZero = 0;
-  let cursor: string | undefined;
+  // How many rows disagree with the formula, before touching anything.
+  const wrongRows = await prisma.$queryRaw<{ wrong: bigint }[]>`
+    SELECT COUNT(*) AS wrong FROM trades
+    WHERE "chainId" = ${chainId} AND price <> ${PRICE_SQL}`;
+  const destroyedRows = await prisma.$queryRaw<{ destroyed: bigint }[]>`
+    SELECT COUNT(*) AS destroyed FROM trades
+    WHERE "chainId" = ${chainId} AND price = 0
+      AND "quoteAmount" > 0 AND "tokenAmount" > 0`;
+  const wrong = wrongRows[0]?.wrong ?? 0n;
+  const destroyed = destroyedRows[0]?.destroyed ?? 0n;
 
-  for (;;) {
-    const rows = await prisma.trade.findMany({
-      where: { chainId: ROBINHOOD_CHAIN_ID },
-      select: { id: true, price: true, quoteAmount: true, tokenAmount: true },
-      orderBy: { id: "asc" },
-      take: BATCH,
-      ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
-    });
-    if (rows.length === 0) break;
-    cursor = rows[rows.length - 1]!.id;
-    if (maxRows !== null && seen >= maxRows) break;
+  console.log(`  trades needing a new price : ${wrong}`);
+  console.log(`  of which stored zero       : ${destroyed}\n`);
 
-    for (const row of rows) {
-      seen += 1;
-      const stored = toBigInt(row.price);
-      const correct = priceFromTrade({
-        quoteAmount: toBigInt(row.quoteAmount),
-        tokenAmount: toBigInt(row.tokenAmount),
-      });
-      if (stored === correct) continue;
-      changed += 1;
-      if (stored === 0n) zeroBefore += 1;
-      if (stored === 0n && correct > 0n) rescuedFromZero += 1;
-
-      if (apply) pendingWrites.push({ id: row.id, price: correct });
-    }
-
-    // Writes go out CONCURRENTLY, not batched into one transaction.
-    //
-    // Two wrong turns are recorded here because the second looked like the fix for the
-    // first. A row-at-a-time loop was too slow: reads already came back 2,000 at a
-    // time, so the read pass finished in about a minute while the write pass would
-    // have made 441,390 separate round trips. Wrapping each batch in `$transaction`
-    // fixed the round trips and hung outright — DATABASE_URL is Neon's POOLED host,
-    // and a 2,000-statement explicit transaction through a connection pooler is the
-    // same class of problem the project already documents for DDL, which is why
-    // DIRECT_URL exists. Observed: process alive, log frozen, zero rows written.
-    //
-    // Concurrency without an explicit transaction avoids both. Each update is its own
-    // implicit transaction, which a pooler handles fine, and the work is idempotent —
-    // a row is recomputed from immutable trade amounts and skipped if already correct
-    // — so batch atomicity buys nothing here.
-    await runConcurrently(pendingWrites, WRITE_CONCURRENCY, (write) =>
-      prisma.trade.update({
-        where: { id: write.id },
-        data: { price: toDecimal(write.price) },
-      }),
+  // Check the two implementations agree BEFORE anything is written.
+  //
+  // The SQL below is a second implementation of `priceFromTrade`, and a second
+  // implementation is a second thing to get wrong. Asking Postgres what it WOULD
+  // produce and comparing that against the real function costs one read and answers
+  // the only question that matters before a migration: is the formula right.
+  const agreed = await verifyAgainstTypeScript(prisma, chainId);
+  if (!agreed) {
+    console.error(
+      "\n  SQL and priceFromTrade disagree. Nothing has been written.\n" +
+        "  Fix the formula before running with --apply.",
     );
-    pendingWrites.length = 0;
-
-    // Newline-terminated, not a \r progress bar. This is a long unattended pass over
-    // hundreds of thousands of rows, so it is run with nohup or under a service and
-    // its output is redirected — where a carriage-return bar buffers into nothing and
-    // the operator cannot tell a slow run from a hung one.
-    // Every batch while writing, so a stall is visible within seconds rather than
-    // after ten batches. That delay is what made the hang above look like slowness.
-    if (apply || seen % PROGRESS_EVERY < BATCH) {
-      const elapsed = Math.round((Date.now() - startedAt) / 1000);
-      console.log(
-        `  examined ${seen}/${total}  to change: ${changed}  (${elapsed}s elapsed)`,
-      );
-    }
-  }
-  console.log("");
-  console.log(`  trades needing a new price : ${changed}`);
-  console.log(`  of which stored zero       : ${zeroBefore}`);
-  console.log(`  zero -> a real price       : ${rescuedFromZero}\n`);
-
-  if (maxRows !== null) {
-    console.log(`\n  Trial run of ${maxRows} trades finished. Token pass skipped.`);
-    console.log(
-      "  Re-run without --limit to complete it; already-correct rows are skipped.",
-    );
+    process.exitCode = 1;
     await prisma.$disconnect();
     return;
   }
 
-  // Tokens take their price from their most recent trade, matching the indexer.
-  const tokens = await prisma.token.findMany({
-    where: { chainId: ROBINHOOD_CHAIN_ID },
-    select: { id: true, symbol: true, price: true, totalSupply: true },
-  });
-  console.log(`\n  restating ${tokens.length} token prices from their latest trade`);
-  let tokensChanged = 0;
-  let tokensSeen = 0;
-  const tokenWrites: { id: string; price: bigint; marketCap: bigint }[] = [];
-  const flushTokenWrites = async (): Promise<void> => {
-    await runConcurrently(tokenWrites, WRITE_CONCURRENCY, (write) =>
-      prisma.token.update({
-        where: { id: write.id },
-        data: {
-          price: toDecimal(write.price),
-          marketCap: toDecimal(write.marketCap),
-        },
-      }),
-    );
-    tokenWrites.length = 0;
-  };
-  for (const token of tokens) {
-    tokensSeen += 1;
-    if (tokensSeen % 5_000 === 0) {
-      console.log(`  tokens ${tokensSeen}/${tokens.length}  to change: ${tokensChanged}`);
-    }
-    const latest = await prisma.trade.findFirst({
-      where: { tokenId: token.id },
-      orderBy: [{ blockNumber: "desc" }, { logIndex: "desc" }],
-      select: { quoteAmount: true, tokenAmount: true },
-    });
-    // No trades: the opening price came from curve reserves and is re-derived by the
-    // indexer when it next sees the launch. Left alone here rather than guessed at.
-    if (!latest) continue;
-
-    const price = priceFromTrade({
-      quoteAmount: toBigInt(latest.quoteAmount),
-      tokenAmount: toBigInt(latest.tokenAmount),
-    });
-    if (toBigInt(token.price) === price) continue;
-    tokensChanged += 1;
-    if (apply) {
-      tokenWrites.push({
-        id: token.id,
-        price,
-        marketCap: marketCapFromPrice(price, toBigInt(token.totalSupply)),
-      });
-      if (tokenWrites.length >= BATCH) {
-        await flushTokenWrites();
-      }
-    }
-  }
-  if (apply && tokenWrites.length > 0) await flushTokenWrites();
-  console.log(`  tokens needing a new price : ${tokensChanged} of ${tokens.length}`);
-
   if (dryRun) {
-    console.log("\n  Dry run. Nothing was written. Re-run with --apply to perform it.");
-  } else {
-    console.log("\n  Done. Restart the indexer.");
+    console.log("  Dry run. Nothing was written. Re-run with --apply to perform it.");
+    await prisma.$disconnect();
+    return;
   }
+
+  // ONE statement, executed by Postgres over its own rows.
+  //
+  // The previous version sent 441,390 updates across the network from Node. Measured
+  // on the real database: batches with nothing to change took a second; the first
+  // batch that actually wrote 2,000 rows took 99, which puts the whole pass at about
+  // six hours. The arithmetic is a multiply and a floor-divide — there is no reason
+  // for any of it to leave the database.
+  //
+  // `numeric` is exact and arbitrary-precision in Postgres, and `trunc` on a positive
+  // value is floor, so this matches `mulDiv` in @stunks/utils exactly. The scale is
+  // written out in full rather than as 1e27, which would be a float literal and would
+  // put a float in the middle of a money path.
+  console.log("  rewriting trade prices in one statement...");
+  const startedTrades = Date.now();
+  const tradesWritten = await prisma.$executeRaw`
+    UPDATE trades SET price = ${PRICE_SQL}
+    WHERE "chainId" = ${chainId} AND price <> ${PRICE_SQL}`;
+  console.log(
+    `  ${tradesWritten} trade rows in ${((Date.now() - startedTrades) / 1000).toFixed(1)}s\n`,
+  );
+
+  // Token price is the price of its most recent trade, matching the indexer's
+  // `latestForTokens`, and market cap follows from it.
+  console.log("  restating token prices from their latest trade...");
+  const startedTokens = Date.now();
+  const tokensWritten = await prisma.$executeRaw`
+    UPDATE tokens AS t
+    SET price = latest.price,
+        "marketCap" = div(latest.price * t."totalSupply", ${SCALE_SQL}),
+        "updatedAt" = now()
+    FROM (
+      SELECT DISTINCT ON ("tokenId") "tokenId", price
+      FROM trades WHERE "chainId" = ${chainId}
+      ORDER BY "tokenId", "blockNumber" DESC, "logIndex" DESC
+    ) AS latest
+    WHERE t.id = latest."tokenId"
+      AND (t.price <> latest.price
+           OR t."marketCap" <> div(latest.price * t."totalSupply", ${SCALE_SQL}))`;
+  console.log(
+    `  ${tokensWritten} token rows in ${((Date.now() - startedTokens) / 1000).toFixed(1)}s\n`,
+  );
+
+  // And again on the rows as they now stand, so the report is about what was written
+  // rather than about what was planned.
+  const stillAgrees = await verifyAgainstTypeScript(prisma, chainId);
+  if (!stillAgrees) {
+    console.error(
+      "  The written rows do not match priceFromTrade. Investigate before trusting\n" +
+        "  them, and do not start the indexer yet.",
+    );
+    process.exitCode = 1;
+  } else {
+    console.log("  Done. Start the indexer.");
+  }
+
   await prisma.$disconnect();
 }
 
