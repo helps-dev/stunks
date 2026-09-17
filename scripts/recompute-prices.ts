@@ -33,6 +33,11 @@
  * Stop the indexer first. It writes the same rows, and a concurrent recompute would
  * interleave with it.
  *
+ * SAFE TO INTERRUPT AND RE-RUN. Every row is recomputed from `quoteAmount` and
+ * `tokenAmount`, and a row already holding the correct value is skipped, so a second
+ * run finishes whatever the first did not and a completed run is a no-op. If the
+ * connection drops halfway through, start it again.
+ *
  * This is a long, write-heavy pass over every trade. Run it deliberately.
  */
 
@@ -68,6 +73,8 @@ async function main(): Promise<void> {
   console.log(`trades to examine: ${total}\n`);
 
   const startedAt = Date.now();
+  /** Accumulated per batch, flushed as one transaction. */
+  const pendingWrites: { id: string; price: bigint }[] = [];
   let seen = 0;
   let changed = 0;
   let zeroBefore = 0;
@@ -97,12 +104,26 @@ async function main(): Promise<void> {
       if (stored === 0n) zeroBefore += 1;
       if (stored === 0n && correct > 0n) rescuedFromZero += 1;
 
-      if (apply) {
-        await prisma.trade.update({
-          where: { id: row.id },
-          data: { price: toDecimal(correct) },
-        });
-      }
+      if (apply) pendingWrites.push({ id: row.id, price: correct });
+    }
+
+    // Writes go out in one round trip per batch, not one per row.
+    //
+    // A row-at-a-time loop is what this replaced, and the asymmetry was invisible in
+    // a dry run: reads already came back 2,000 at a time, so the read pass finished in
+    // about a minute while the write pass would have made 441,390 separate round trips
+    // — hours, on the same data, for the same work. `$transaction` with an array sends
+    // the statements together and they all commit or none do.
+    if (pendingWrites.length > 0) {
+      await prisma.$transaction(
+        pendingWrites.map((write) =>
+          prisma.trade.update({
+            where: { id: write.id },
+            data: { price: toDecimal(write.price) },
+          }),
+        ),
+      );
+      pendingWrites.length = 0;
     }
 
     // Newline-terminated, not a \r progress bar. This is a long unattended pass over
@@ -129,6 +150,7 @@ async function main(): Promise<void> {
   console.log(`\n  restating ${tokens.length} token prices from their latest trade`);
   let tokensChanged = 0;
   let tokensSeen = 0;
+  const tokenWrites: ReturnType<typeof prisma.token.update>[] = [];
   for (const token of tokens) {
     tokensSeen += 1;
     if (tokensSeen % 5_000 === 0) {
@@ -150,14 +172,24 @@ async function main(): Promise<void> {
     if (toBigInt(token.price) === price) continue;
     tokensChanged += 1;
     if (apply) {
-      await prisma.token.update({
-        where: { id: token.id },
-        data: {
-          price: toDecimal(price),
-          marketCap: toDecimal(marketCapFromPrice(price, toBigInt(token.totalSupply))),
-        },
-      });
+      tokenWrites.push(
+        prisma.token.update({
+          where: { id: token.id },
+          data: {
+            price: toDecimal(price),
+            marketCap: toDecimal(marketCapFromPrice(price, toBigInt(token.totalSupply))),
+          },
+        }),
+      );
+      if (tokenWrites.length >= BATCH) {
+        await prisma.$transaction(tokenWrites);
+        tokenWrites.length = 0;
+      }
     }
+  }
+  if (apply && tokenWrites.length > 0) {
+    await prisma.$transaction(tokenWrites);
+    tokenWrites.length = 0;
   }
   console.log(`  tokens needing a new price : ${tokensChanged} of ${tokens.length}`);
 
