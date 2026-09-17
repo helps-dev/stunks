@@ -121,7 +121,24 @@ export function createReadClient(
     endpoints,
     multicall: true,
     multicallWaitMs: 40,
-    pool: { strategy: "fastest", attemptsPerEndpoint: 2, timeoutMs: 10_000 },
+    /**
+     * A strict time budget, because this client runs inside a request.
+     *
+     * It was 2 attempts at 10 s each. Across two endpoints that is FORTY seconds for
+     * one call, and a serverless function is killed long before that — 10 s on
+     * Vercel's Hobby plan. The visitor would get a 504 with an empty body, while the
+     * app's own "the chain could not be reached" page, which exists and is correct,
+     * never got the chance to render.
+     *
+     * One attempt at 3 s, twice over, is 6 s worst case and leaves room for the
+     * database and rendering. Losing the retry costs little: the pool already fails
+     * over to the other endpoint, which covers the same transient failure, and the
+     * 60-second protocol cache means most requests make no RPC call at all.
+     *
+     * The indexer keeps its patience — see `createIndexerClient`. A worker with no
+     * one waiting should retry; a page with someone waiting should give up and say so.
+     */
+    pool: { strategy: "fastest", attemptsPerEndpoint: 1, timeoutMs: 3_000 },
   });
 }
 
