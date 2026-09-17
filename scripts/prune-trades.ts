@@ -137,19 +137,35 @@ async function main(): Promise<void> {
   if (doomed === 0) {
     console.log("  Nothing to do.\n");
 
-    // Say WHY nothing matched, because on this chain the usual reason is that the
-    // retention window is longer than the database can physically hold.
+    // Say WHICH constraint bound, because the two have opposite remedies and the
+    // wrong diagnosis sends you to change a setting that was never the problem.
     const spanRows = await prisma.$queryRaw<{ hours: number | null }[]>`
       SELECT EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) / 3600 AS hours
       FROM trades WHERE "chainId" = ${chainId}`;
     const span = spanRows[0]?.hours ?? null;
-    if (span !== null && span > 0 && span < hours) {
-      const perHour = total / span;
+
+    if (cutoff.getTime() === rolledThrough.getTime()) {
+      // The rollup boundary won, so retention never came into it. This is the normal
+      // state while the indexer is running: it writes trades faster than the rollup
+      // turns them into aggregates, and the interlock refuses to delete the difference.
       console.log(
-        `  The stored trades span ${span.toFixed(1)} hours — less than the ${hours}-hour\n` +
-          `  window — so nothing is old enough to remove. At ${Math.round(perHour)} trades an hour\n` +
-          `  this chain produces roughly 27 MB of trade data per hour (R42).\n\n` +
-          `  A window only frees space if it is SHORTER than what fits. Try --hours 6.`,
+        `  The cutoff came from the ROLLUP boundary, not the ${hours}-hour window —\n` +
+          `  everything still here was indexed after ${rolledThrough.toISOString()}\n` +
+          `  and no aggregate covers it yet. Nothing is wrong: the interlock is doing\n` +
+          `  exactly its job.\n\n` +
+          `  Run \`pnpm rollup:aggregates -- --apply\` once another hour completes, then\n` +
+          `  this again. Changing --hours would have no effect while the rollup is what\n` +
+          `  binds.`,
+      );
+    } else if (span !== null && span > 0 && span < hours) {
+      const suggestion = Math.max(1, Math.floor(span / 2));
+      console.log(
+        `  The stored trades span ${span.toFixed(1)} hours — shorter than the ${hours}-hour\n` +
+          `  window — so nothing is old enough to remove. This chain produces roughly\n` +
+          `  27 MB of trade rows an hour (R42), which is why a window measured in days\n` +
+          `  never matches anything here.\n\n` +
+          `  A window only frees space if it is SHORTER than what is stored. Try\n` +
+          `  --hours ${suggestion}.`,
       );
     }
     await prisma.$disconnect();
