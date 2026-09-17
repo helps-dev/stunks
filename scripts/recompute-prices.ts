@@ -50,6 +50,32 @@ import {
 } from "../apps/indexer/src/pricing.js";
 
 const BATCH = 2_000;
+/**
+ * In-flight updates. High enough to hide the round trip, low enough to stay well
+ * inside a pooled connection allowance and leave room for the indexer.
+ */
+const WRITE_CONCURRENCY = 24;
+
+/** Run `task` over `items`, never more than `limit` at once. Preserves no order. */
+async function runConcurrently<T>(
+  items: readonly T[],
+  limit: number,
+  task: (item: T) => Promise<unknown>,
+): Promise<void> {
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = next;
+      next += 1;
+      const item = items[index];
+      if (item === undefined) return;
+      await task(item);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+}
 /** How often to print a progress line. Every batch would be noisy; never is worse. */
 const PROGRESS_EVERY = 20_000;
 
@@ -57,14 +83,40 @@ function has(flag: string): boolean {
   return process.argv.includes(`--${flag}`);
 }
 
+/**
+ * `--limit N` stops after N trades and skips the token pass.
+ *
+ * A trial run, and it exists because the write path here was twice changed and twice
+ * shipped without ever having executed — the second attempt hung against a pooled
+ * connection and wrote nothing at all, which a dry run cannot reveal because a dry run
+ * writes nothing by definition. A hundred rows proves the writes land in seconds, and
+ * the script is idempotent, so the trial is simply part of the real run.
+ */
+function limit(): number | null {
+  const index = process.argv.indexOf("--limit");
+  if (index === -1) return null;
+  const raw = process.argv[index + 1];
+  // eslint-disable-next-line no-restricted-syntax -- a row count is not money
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    console.error(`--limit needs a positive whole number, got: ${raw ?? "(nothing)"}`);
+    process.exit(1);
+  }
+  return parsed;
+}
+
 async function main(): Promise<void> {
   const apply = has("apply");
   const dryRun = has("dry-run") || !apply;
+  const maxRows = limit();
 
   if (!apply && !has("dry-run")) {
     console.log("No mode given; defaulting to --dry-run. Pass --apply to write.\n");
   }
   console.log(`mode: ${dryRun ? "DRY RUN — nothing is written" : "APPLY"}`);
+  if (maxRows !== null) {
+    console.log(`limit: ${maxRows} trades, and the token pass is skipped`);
+  }
   console.log(`target scale: 1e${PRICE_SCALE.toString().length - 1}\n`);
 
   const prisma = getPrisma();
@@ -91,6 +143,7 @@ async function main(): Promise<void> {
     });
     if (rows.length === 0) break;
     cursor = rows[rows.length - 1]!.id;
+    if (maxRows !== null && seen >= maxRows) break;
 
     for (const row of rows) {
       seen += 1;
@@ -107,30 +160,36 @@ async function main(): Promise<void> {
       if (apply) pendingWrites.push({ id: row.id, price: correct });
     }
 
-    // Writes go out in one round trip per batch, not one per row.
+    // Writes go out CONCURRENTLY, not batched into one transaction.
     //
-    // A row-at-a-time loop is what this replaced, and the asymmetry was invisible in
-    // a dry run: reads already came back 2,000 at a time, so the read pass finished in
-    // about a minute while the write pass would have made 441,390 separate round trips
-    // — hours, on the same data, for the same work. `$transaction` with an array sends
-    // the statements together and they all commit or none do.
-    if (pendingWrites.length > 0) {
-      await prisma.$transaction(
-        pendingWrites.map((write) =>
-          prisma.trade.update({
-            where: { id: write.id },
-            data: { price: toDecimal(write.price) },
-          }),
-        ),
-      );
-      pendingWrites.length = 0;
-    }
+    // Two wrong turns are recorded here because the second looked like the fix for the
+    // first. A row-at-a-time loop was too slow: reads already came back 2,000 at a
+    // time, so the read pass finished in about a minute while the write pass would
+    // have made 441,390 separate round trips. Wrapping each batch in `$transaction`
+    // fixed the round trips and hung outright — DATABASE_URL is Neon's POOLED host,
+    // and a 2,000-statement explicit transaction through a connection pooler is the
+    // same class of problem the project already documents for DDL, which is why
+    // DIRECT_URL exists. Observed: process alive, log frozen, zero rows written.
+    //
+    // Concurrency without an explicit transaction avoids both. Each update is its own
+    // implicit transaction, which a pooler handles fine, and the work is idempotent —
+    // a row is recomputed from immutable trade amounts and skipped if already correct
+    // — so batch atomicity buys nothing here.
+    await runConcurrently(pendingWrites, WRITE_CONCURRENCY, (write) =>
+      prisma.trade.update({
+        where: { id: write.id },
+        data: { price: toDecimal(write.price) },
+      }),
+    );
+    pendingWrites.length = 0;
 
     // Newline-terminated, not a \r progress bar. This is a long unattended pass over
     // hundreds of thousands of rows, so it is run with nohup or under a service and
     // its output is redirected — where a carriage-return bar buffers into nothing and
     // the operator cannot tell a slow run from a hung one.
-    if (seen % PROGRESS_EVERY < BATCH) {
+    // Every batch while writing, so a stall is visible within seconds rather than
+    // after ten batches. That delay is what made the hang above look like slowness.
+    if (apply || seen % PROGRESS_EVERY < BATCH) {
       const elapsed = Math.round((Date.now() - startedAt) / 1000);
       console.log(
         `  examined ${seen}/${total}  to change: ${changed}  (${elapsed}s elapsed)`,
@@ -142,6 +201,15 @@ async function main(): Promise<void> {
   console.log(`  of which stored zero       : ${zeroBefore}`);
   console.log(`  zero -> a real price       : ${rescuedFromZero}\n`);
 
+  if (maxRows !== null) {
+    console.log(`\n  Trial run of ${maxRows} trades finished. Token pass skipped.`);
+    console.log(
+      "  Re-run without --limit to complete it; already-correct rows are skipped.",
+    );
+    await prisma.$disconnect();
+    return;
+  }
+
   // Tokens take their price from their most recent trade, matching the indexer.
   const tokens = await prisma.token.findMany({
     where: { chainId: ROBINHOOD_CHAIN_ID },
@@ -150,7 +218,19 @@ async function main(): Promise<void> {
   console.log(`\n  restating ${tokens.length} token prices from their latest trade`);
   let tokensChanged = 0;
   let tokensSeen = 0;
-  const tokenWrites: ReturnType<typeof prisma.token.update>[] = [];
+  const tokenWrites: { id: string; price: bigint; marketCap: bigint }[] = [];
+  const flushTokenWrites = async (): Promise<void> => {
+    await runConcurrently(tokenWrites, WRITE_CONCURRENCY, (write) =>
+      prisma.token.update({
+        where: { id: write.id },
+        data: {
+          price: toDecimal(write.price),
+          marketCap: toDecimal(write.marketCap),
+        },
+      }),
+    );
+    tokenWrites.length = 0;
+  };
   for (const token of tokens) {
     tokensSeen += 1;
     if (tokensSeen % 5_000 === 0) {
@@ -172,25 +252,17 @@ async function main(): Promise<void> {
     if (toBigInt(token.price) === price) continue;
     tokensChanged += 1;
     if (apply) {
-      tokenWrites.push(
-        prisma.token.update({
-          where: { id: token.id },
-          data: {
-            price: toDecimal(price),
-            marketCap: toDecimal(marketCapFromPrice(price, toBigInt(token.totalSupply))),
-          },
-        }),
-      );
+      tokenWrites.push({
+        id: token.id,
+        price,
+        marketCap: marketCapFromPrice(price, toBigInt(token.totalSupply)),
+      });
       if (tokenWrites.length >= BATCH) {
-        await prisma.$transaction(tokenWrites);
-        tokenWrites.length = 0;
+        await flushTokenWrites();
       }
     }
   }
-  if (apply && tokenWrites.length > 0) {
-    await prisma.$transaction(tokenWrites);
-    tokenWrites.length = 0;
-  }
+  if (apply && tokenWrites.length > 0) await flushTokenWrites();
   console.log(`  tokens needing a new price : ${tokensChanged} of ${tokens.length}`);
 
   if (dryRun) {
