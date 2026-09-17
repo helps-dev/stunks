@@ -2,13 +2,14 @@
   "name": "stunks",
   "version": "0.1.0",
   "private": true,
-  "description": "STUNKS.FUN — non-custodial token launchpad and trading platform on Robinhood Chain, built on Pons V2",
+  "description": "STUNKS.FUN \u2014 non-custodial token launchpad and trading platform on Robinhood Chain, built on Pons V2",
   "packageManager": "pnpm@9.12.0",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
     "build": "turbo run build",
+    "postinstall": "prisma generate --schema prisma/schema.prisma",
     "typecheck": "turbo run typecheck && pnpm typecheck:scripts",
     "typecheck:scripts": "tsc --noEmit -p tsconfig.json",
     "lint": "turbo run lint",

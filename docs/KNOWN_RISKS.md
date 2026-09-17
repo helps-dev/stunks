@@ -1254,3 +1254,52 @@ CSP at `img-src 'self'` and keeps visitor IPs away from creator-chosen hosts. An
 is a document and can carry `<script>`, and same-origin is exactly where that script
 would run. The allowlist is PNG, JPEG, GIF, WebP and AVIF. This costs a small number
 of legitimate logos and removes stored XSS from the threat model.
+
+## R47 — Nothing generated the Prisma client, so a schema change broke the Vercel build
+
+**Status: fixed.** Adding `Token.metadataCheckedAt` failed the Vercel build with:
+
+    error TS2353: 'metadataCheckedAt' does not exist in type 'TokenCreateManyInput'
+
+The migration had already been applied to the database. What was stale was the
+GENERATED CLIENT: `prisma generate` writes TypeScript types into `node_modules`, and
+nothing in this repo ever ran it as part of a build. It worked locally and on the VPS
+only because `pnpm prisma:generate` was typed by hand after each schema change, which
+is a step that exists nowhere in the repo and therefore could not survive a machine
+that nobody types on.
+
+Vercel made it worse by restoring `node_modules` from its build cache, so the client
+came back as whatever it was before the column existed.
+
+The fix is a root `postinstall` running `prisma generate`. It is deliberately NOT in a
+package's `build` script: those run under Turborepo, and a cache hit replays logs
+without executing, so the one run that mattered could be skipped. `postinstall` runs
+on every `pnpm install`, before Turbo starts, and it needs no database connection —
+`generate` reads the schema and nothing else.
+
+It also removes the manual step from the VPS deploy: `pnpm install` now regenerates
+the client on its own.
+
+**A second, quieter version of the same gap, also fixed.** `prisma/schema.prisma` sits
+at the repo root, so it was not an input to `@stunks/database`'s Turbo task. A schema
+change with no change to that package's own files would have produced a CACHE HIT —
+Turbo replaying an old success while the real code no longer typechecked. The schema
+is now a `globalDependency`, so changing it invalidates every task that could be
+affected by it.
+
+## R48 — Turbo reports environment variables it will not pass to builds
+
+**Status: understood, no change.** The Vercel build warns that `DATABASE_URL`,
+`DIRECT_URL`, `RPC_ENDPOINTS` and others are set on the project but absent from
+`turbo.json`, and "WILL NOT be available to your application".
+
+This is about BUILD time only, and no build step reads them: every package's `build`
+is `tsc --noEmit`, and the web app's pages are `force-dynamic`, so nothing queries the
+database while building. At run time Vercel injects the variables into the serverless
+function directly, with Turbo nowhere in the path. `NEXT_PUBLIC_*` is handled by
+Turbo's own framework inference, which is why `@stunks/web` is absent from the warning
+and why the CSP built from `NEXT_PUBLIC_RPC_ENDPOINTS` in `next.config.mjs` is correct.
+
+Declaring them anyway would put `DATABASE_URL` into the cache key of tasks that never
+read it, so a pooled-host change would invalidate unrelated builds. The warning is
+left in place rather than silenced by a change that would make caching worse.

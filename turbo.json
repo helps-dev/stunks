@@ -1,4 +1,5 @@
 {
+  "globalDependencies": ["prisma/schema.prisma"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
