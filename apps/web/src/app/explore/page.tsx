@@ -1,7 +1,5 @@
 import type { ExploreSort } from "@stunks/database";
-import { formatBlockLag, formatCompact } from "@stunks/utils";
-import { BLOCK_TIME_SECONDS, KNOWN_RPC_ENDPOINTS } from "@stunks/config";
-import { createReadClient } from "@stunks/web3";
+import { formatCompact } from "@stunks/utils";
 import { exploreTokens, platformStats } from "@/lib/queries";
 import { TokenCard } from "@/components/token-card";
 
@@ -26,28 +24,6 @@ const TABS: { key: ExploreSort; label: string }[] = [
 
 const PAGE_SIZE = 24;
 
-function endpoints(): string[] {
-  const configured = process.env.NEXT_PUBLIC_RPC_ENDPOINTS ?? process.env.RPC_ENDPOINTS;
-  if (configured) {
-    return configured
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  }
-  return [KNOWN_RPC_ENDPOINTS.drpc];
-}
-
-async function chainHead(): Promise<bigint | null> {
-  try {
-    const { client } = createReadClient(endpoints());
-    return await client.getBlockNumber();
-  } catch {
-    // Unreachable chain is reported by the staleness banner, not by failing the page:
-    // indexed data is still worth showing, just labelled honestly.
-    return null;
-  }
-}
-
 interface PageProps {
   readonly searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
@@ -61,20 +37,21 @@ export default async function ExplorePage({ searchParams }: PageProps) {
   const search = typeof params.q === "string" ? params.q : undefined;
   const cursor = typeof params.cursor === "string" ? params.cursor : undefined;
 
-  const head = await chainHead();
-
   const [result, stats] = await Promise.all([
     exploreTokens({
       sort,
       limit: PAGE_SIZE,
       ...(cursor !== undefined ? { cursor } : {}),
       ...(search !== undefined ? { search } : {}),
-      chainHead: head,
+      // Null, deliberately. This page no longer shows how far behind the index is,
+      // and reading the chain head is a network round trip on the render path — with
+      // a 3-second timeout — that would feed nothing. Passing a head again is all it
+      // takes to bring the freshness banner back.
+      chainHead: null,
     }),
     platformStats(),
   ]);
 
-  const staleness = result.staleness;
 
   return (
     <main className="explore-page">
@@ -100,48 +77,6 @@ export default async function ExplorePage({ searchParams }: PageProps) {
           label="Indexed volume"
           value={`${formatCompact(BigInt(stats.totalVolume), 18)} quote`}
         />
-      </div>
-
-      {/*
-        Honest about how current this is, including when it is not current.
-
-        The headline figure is the SLOWEST stream, because that is what actually bounds
-        the numbers below: prices and volume come from the curve stream, and it is the
-        one structurally capable of falling a long way behind. Each stream is then named
-        individually, so "behind" points at where the backlog really is.
-      */}
-      <div className={staleness.isStale ? "indexer-status stale" : "indexer-status"}>
-        <span className="indexer-status-icon">{staleness.isStale ? "!" : "✓"}</span>
-        <div>
-          <strong>{staleness.isStale ? "Indexer catching up" : "Indexer current"}</strong>
-          {staleness.lagBlocks !== null ? (
-            <p>
-              Indexed to block <span className="mono">{staleness.indexedBlock}</span> of{" "}
-              <span className="mono">{staleness.chainHead}</span> —{" "}
-              {formatBlockLag(BigInt(staleness.lagBlocks), BLOCK_TIME_SECONDS)}
-              {staleness.stream !== null && `, bounded by the ${staleness.stream} stream`}
-              .{staleness.isStale && " Figures below may be behind the chain."}
-            </p>
-          ) : (
-            <p>
-              Could not determine current chain lag. Treat metrics as indicative only.
-            </p>
-          )}
-          {staleness.streams.length > 0 && (
-            <ul className="indexer-streams">
-              {staleness.streams.map((stream) => (
-                <li key={stream.stream}>
-                  <span className="indexer-stream-name">{stream.stream}</span>{" "}
-                  <span className="mono">{stream.indexedBlock}</span>
-                  {stream.lagBlocks !== null && (
-                    <> — {formatBlockLag(BigInt(stream.lagBlocks), BLOCK_TIME_SECONDS)}</>
-                  )}
-                  {stream.isPaused && " — paused"}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
       </div>
 
       {/*

@@ -2171,50 +2171,6 @@ table.compact td {
   display: none;
 }
 
-
-.hero-freshness {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  margin-top: 13px;
-  padding: 9px 10px;
-  border: 1px solid rgba(193, 255, 66, 0.19);
-  border-radius: 9px;
-  color: var(--brand);
-  background: rgba(193, 255, 66, 0.045);
-}
-
-.hero-freshness.stale {
-  border-color: rgba(255, 209, 102, 0.28);
-  color: var(--warn);
-  background: rgba(255, 209, 102, 0.05);
-}
-
-.hero-freshness > span {
-  display: grid;
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-  place-items: center;
-  border-radius: 50%;
-  color: var(--brand-ink);
-  background: var(--brand);
-  font-size: 0.61rem;
-  font-weight: 900;
-}
-
-.hero-freshness.stale > span {
-  color: #2a1d00;
-  background: var(--warn);
-}
-
-.hero-freshness p {
-  margin: 0;
-  color: inherit;
-  font-size: 0.66rem;
-  line-height: 1.35;
-}
-
 .wallet-compact-note {
   display: inline-flex;
   max-width: 105px;

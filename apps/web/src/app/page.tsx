@@ -2,7 +2,6 @@ import Image from "next/image";
 import Link from "next/link";
 import {
   formatBps,
-  formatBlockLag,
   formatCompact,
   formatUnitsExact,
   ratioBps,
@@ -218,27 +217,6 @@ export default async function Page() {
                         {indexed.stats.graduatedCount.toLocaleString("en-US")}
                       </strong>
                     </div>
-                  </div>
-                  <div
-                    className={
-                      indexed.trending.staleness.isStale
-                        ? "hero-freshness stale"
-                        : "hero-freshness"
-                    }
-                  >
-                    <span>{indexed.trending.staleness.isStale ? "!" : "✓"}</span>
-                    <p>
-                      {indexed.trending.staleness.lagBlocks !== null
-                        ? `Indexed to ${indexed.trending.staleness.indexedBlock} — ${formatBlockLag(
-                            BigInt(indexed.trending.staleness.lagBlocks),
-                            BLOCK_TIME_SECONDS,
-                          )}${indexed.trending.staleness.isStale ? " behind chain" : " current"}${
-                            indexed.trending.staleness.stream !== null
-                              ? ` (${indexed.trending.staleness.stream} stream)`
-                              : ""
-                          }`
-                        : "Live chain unavailable — indexed figures only"}
-                    </p>
                   </div>
                 </>
               ) : (
