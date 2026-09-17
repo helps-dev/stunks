@@ -28,8 +28,21 @@ export interface HealthSnapshot {
     lastError: string | null;
     isPaused: boolean;
     logWindowSize: number;
+    /**
+     * Blocks between the configured start block and this checkpoint that the index
+     * does not cover. Null when the checkpoint is at or below the start.
+     */
+    unscannedBelow: string | null;
   }[];
   readonly unresolvedFailedBlocks: number;
+  /**
+   * True when a stream's checkpoint sits above the configured start block, so the
+   * range in between is not covered by the index.
+   *
+   * This is not lag. Lag catches up; a gap below the checkpoint never does, because
+   * `advance` only ever moves forward.
+   */
+  readonly hasUnscannedHistory: boolean;
   readonly rpc: {
     url: string;
     healthy: boolean;
@@ -45,6 +58,20 @@ export interface HealthDeps {
   readonly repos: Repositories;
   readonly pool: RpcPool;
   readonly chainHead: () => Promise<bigint>;
+  /**
+   * The block the indexer is configured to start from.
+   *
+   * Reported because it is NOT enforced after first run. `getOrCreate` writes it only
+   * when the checkpoint row is absent and ignores it forever after, so a checkpoint
+   * created once at the wrong height stays wrong and INDEXER_START_BLOCK silently
+   * stops meaning anything.
+   *
+   * Observed on 2026-09-17: configured start 26,841,846, factory checkpoint
+   * 65,231,377, earliest indexed launch 63,775,021 — and TokenLaunched events exist
+   * on-chain down to at least block 40,000,000. Roughly 37M blocks of launch history
+   * were never scanned, while this endpoint reported `ok`.
+   */
+  readonly startBlock: bigint;
 }
 
 export async function buildHealthSnapshot(deps: HealthDeps): Promise<HealthSnapshot> {
@@ -61,6 +88,12 @@ export async function buildHealthSnapshot(deps: HealthDeps): Promise<HealthSnaps
 
   const streamReports = streams.map((state) => {
     const lagBlocks = chainHead === null ? null : chainHead - state.lastProcessedBlock;
+    // A gap BELOW the checkpoint, which is a different thing from being behind the
+    // head. Nothing in the indexer will ever go back for it.
+    const unscannedBelow =
+      state.lastProcessedBlock > deps.startBlock
+        ? state.lastProcessedBlock - deps.startBlock
+        : null;
     return {
       stream: state.stream,
       indexedBlock: state.lastProcessedBlock.toString(),
@@ -74,13 +107,25 @@ export async function buildHealthSnapshot(deps: HealthDeps): Promise<HealthSnaps
       lastError: state.lastError,
       isPaused: state.isPaused,
       logWindowSize: state.logWindowSize,
+      unscannedBelow: unscannedBelow?.toString() ?? null,
     };
   });
+
+  // Only meaningful for a stream that legitimately starts at the configured block.
+  // The curve stream is fast-forwarded past provably empty history on purpose, so it
+  // is excluded rather than reported as a permanent gap.
+  const hasUnscannedHistory = streamReports.some(
+    (report) => report.stream === "factory" && report.unscannedBelow !== null,
+  );
 
   // Degraded means something needs attention, not simply that a backfill is behind.
   const degraded =
     chainHead === null ||
     unresolvedFailedBlocks > 0 ||
+    // An incomplete index is not healthy, however current its head is. Reporting `ok`
+    // over a 37M-block hole is the same failure as reporting freshness from the
+    // fastest stream: technically about something real, and materially misleading.
+    hasUnscannedHistory ||
     streamReports.some((report) => report.isPaused || report.lastError !== null);
 
   return {
@@ -89,6 +134,7 @@ export async function buildHealthSnapshot(deps: HealthDeps): Promise<HealthSnaps
     chainHead: chainHead?.toString() ?? null,
     streams: streamReports,
     unresolvedFailedBlocks,
+    hasUnscannedHistory,
     rpc: deps.pool.stats().map((endpoint) => ({
       url: endpoint.url,
       healthy: endpoint.healthy,

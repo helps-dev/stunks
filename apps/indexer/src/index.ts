@@ -141,6 +141,7 @@ async function main(): Promise<void> {
       repos,
       pool,
       chainHead: () => factorySource.head(),
+      startBlock: config.startBlock,
     },
     config.HEALTH_HOST,
   );
@@ -154,6 +155,51 @@ async function main(): Promise<void> {
         ? undefined
         : "bound beyond loopback — this endpoint is unauthenticated",
   });
+
+  /**
+   * Say so when the factory checkpoint sits above the configured start block.
+   *
+   * `getOrCreate` writes INDEXER_START_BLOCK only when the checkpoint row does not
+   * exist, and ignores it forever after. So a checkpoint created once at the wrong
+   * height is permanent, the configured value silently stops meaning anything, and
+   * `advance` refuses to move backwards — nothing will ever go back for the range.
+   *
+   * Found on 2026-09-17: configured start 26,841,846, factory checkpoint 65,231,377,
+   * earliest indexed launch 63,775,021, and TokenLaunched events present on-chain down
+   * to at least block 40,000,000. So ~38M blocks of launch history are absent from the
+   * index. Whether that range was never scanned or was scanned and later lost cannot
+   * be told apart from here, and it does not change the remedy — `advance` only moves
+   * forward, so nothing will cover it again without a deliberate rewind.
+   *
+   * The consequence was visible but had been explained away: about a quarter of
+   * decoded curve logs resolved to no known token and were counted as `unmatched`,
+   * with a code comment guessing the factory stream was behind. It was 900,000 blocks
+   * ahead. Every sampled unmatched curve was a genuine V2 launch.
+   *
+   * Reported rather than repaired. Rewinding the checkpoint would re-scan tens of
+   * millions of blocks and is an operator's decision, not a startup side effect.
+   */
+  {
+    const factoryState = await repos.checkpoints.getOrCreate(
+      config.CHAIN_ID,
+      STREAMS.factory,
+      config.startBlock,
+    );
+    if (factoryState.lastProcessedBlock > config.startBlock) {
+      const gap = factoryState.lastProcessedBlock - config.startBlock;
+      log("WARNING: factory history below the checkpoint is not covered", {
+        configuredStartBlock: config.startBlock.toString(),
+        factoryCheckpoint: factoryState.lastProcessedBlock.toString(),
+        unscannedBlocks: gap.toString(),
+        note:
+          "INDEXER_START_BLOCK applies only when the checkpoint row is first created " +
+          "and is ignored afterwards. Launches in this range are absent, and their " +
+          "trades are counted as `unmatched`. To cover it, roll the factory checkpoint " +
+          "back deliberately — with BACKFILL_SOURCE=hypersync, because this range over " +
+          "RPC is measured in days.",
+      });
+    }
+  }
 
   const factoryAddresses = async (): Promise<readonly Address[]> => [config.factory];
   /**

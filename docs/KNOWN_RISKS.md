@@ -944,3 +944,60 @@ pool, so the full batch is attempted, only OrdoFi qualifies, and it is the one f
 The chain produces ~9.87 blocks/second, so the stream is close to keeping pace but
 still does not catch up on a ~900,000 block backlog. See **R3**: that remains a
 capacity problem, not a code one.
+
+---
+
+## R39 — C — The index is missing ~38M blocks of launch history, and reported `ok`
+
+**Observed 2026-09-17.**
+
+|                          |                                           |
+| ------------------------ | ----------------------------------------- |
+| `INDEXER_START_BLOCK`    | 26,841,846 (the factory deploy block)     |
+| factory checkpoint       | 65,231,377                                |
+| earliest indexed launch  | 63,775,021                                |
+| `TokenLaunched` on-chain | present down to at least block 40,000,000 |
+| tokens in the database   | 23,179                                    |
+
+So roughly **38 million blocks** of launch history are absent from the index, and the
+health endpoint reported `ok` throughout.
+
+**How it hid.** The symptom was in the logs the whole time: about a quarter of decoded
+curve logs resolved to no known token and were counted as `unmatched`. The code comment
+next to that counter explained it as _"the factory stream may be behind"_ — and the
+explanation was not checked. The curve stream is capped AT the factory checkpoint, so
+the factory is always equal or ahead; on the day it was 900,000 blocks ahead. Sampling
+the skipped curves settled it: every one was a genuine Pons V2 launch, confirmed
+through `curve.token()` and the factory's own `getLaunchedToken().exists`.
+
+**Mechanism.** `CheckpointRepository.getOrCreate` writes `INDEXER_START_BLOCK` only when
+the checkpoint row is absent:
+
+```ts
+upsert({ create: { lastProcessedBlock: startBlock }, update: {} });
+```
+
+Once the row exists the configured value is ignored forever, and `advance` refuses to
+move backwards. A checkpoint created once at the wrong height is therefore permanent,
+and the environment variable that is supposed to control it silently stops meaning
+anything. Whether this range was never scanned or was scanned and later lost cannot be
+told apart after the fact — and it does not change the remedy.
+
+**What was fixed: visibility, not the data.**
+
+- A loud startup warning when the factory checkpoint sits above the configured start,
+  naming both numbers and the size of the gap.
+- `unscannedBelow` per stream, and `hasUnscannedHistory`, on the health endpoint.
+- `status` is now `degraded` while a gap exists. An incomplete index is not healthy
+  however current its head is — the same failure as R28, where freshness was reported
+  from the fastest stream: technically about something real, and materially misleading.
+- The curve stream is excluded from the flag, because it is fast-forwarded past
+  provably empty history on purpose. It still reports its own `unscannedBelow`.
+
+**What was NOT fixed, and why.** The history itself. Covering it means deliberately
+rolling the factory checkpoint back and re-scanning ~38M blocks, which at RPC rates is
+measured in days and needs `BACKFILL_SOURCE=hypersync`. That is an operator's decision
+with a real cost, not something a process should do to itself at startup.
+
+**Until it is covered**, treat every aggregate the product displays — token counts,
+creator counts, total volume, trending — as covering roughly the last 1.5M blocks only.

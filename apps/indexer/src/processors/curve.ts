@@ -123,9 +123,18 @@ export async function processCurveLogs(
     const curveKey = raw.address.toLowerCase();
     const token = tokenByCurve.get(curveKey);
     if (!token) {
-      // The launch has not been indexed yet — the factory stream may be behind, or
-      // this curve belongs to a launch outside our start block. Counted, not
-      // silently dropped, so a persistent gap is visible.
+      // This trade belongs to a launch that is not in the database.
+      //
+      // The original note here guessed "the factory stream may be behind". It is not:
+      // the curve stream is capped AT the factory checkpoint, so the factory is always
+      // equal or ahead. Measured on 2026-09-17, every sampled unmatched curve was a
+      // genuine V2 launch that the factory had simply never scanned — its checkpoint
+      // had been created above the configured start block, and `getOrCreate` ignores
+      // INDEXER_START_BLOCK once the row exists.
+      //
+      // So a sustained non-zero count here means the index is INCOMPLETE, not that it
+      // is catching up. The startup check and `hasUnscannedHistory` on the health
+      // endpoint report the cause; this counts the consequence.
       unmatched++;
       continue;
     }

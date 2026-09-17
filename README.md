@@ -11,11 +11,12 @@ launch, curve, or liquidity contracts of its own.
 curve trading, the indexer, the token page and explore all exist and run against
 mainnet. Graduated tokens are deliberately not tradeable here yet — see R26.
 
-As of 2026-09-17 the indexed database holds 20,258 tokens, 370,312 trades and
-15,612 creators. That number is not a boast: the curve stream was 715,288 blocks
-behind the head at the time, which is roughly twenty hours. Indexer throughput on
-free public RPC is the open operational problem, not a solved one — see
-[Operating the indexer](#operating-the-indexer).
+As of 2026-09-17 the indexed database holds about 23,000 tokens and 430,000 trades.
+That is not a boast, and it is not the whole chain: the factory checkpoint sits
+roughly 38M blocks above the configured start block, so launches below block
+63,775,021 are absent entirely (R39). The curve stream is separately ~900,000 blocks
+behind the head. Indexer coverage and throughput are the open operational problems —
+see [Operating the indexer](#operating-the-indexer).
 
 ---
 
@@ -195,6 +196,19 @@ how old every price, volume and market cap on the site is.
 ```bash
 curl http://127.0.0.1:9464/health
 ```
+
+Two different things can be wrong, and they are not interchangeable:
+
+- **`lagBlocks`** is distance to the head. It closes on its own.
+- **`unscannedBelow`** is a gap BELOW the checkpoint. It never closes, because
+  `advance` only moves forward. `hasUnscannedHistory` is true while the factory
+  has one, and the endpoint reports `degraded` until it is covered.
+
+As of 2026-09-17 this deployment has such a gap: the factory checkpoint sits about
+38M blocks above the configured start block, so launches from that range are absent
+and their trades are counted as `unmatched`. See R39. Until it is covered, treat
+token counts, creator counts and total volume as covering roughly the most recent
+1.5M blocks only.
 
 That endpoint is unauthenticated and reports checkpoints, RPC URLs and failure
 counts, so it binds to loopback. `HEALTH_HOST` is what enforces that — a port
