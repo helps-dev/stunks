@@ -3,7 +3,11 @@
  *
  *   pnpm prune:trades                          report what would go, delete nothing
  *   pnpm prune:trades -- --apply               perform it
- *   pnpm prune:trades -- --days 14 --apply     keep two weeks instead of one
+ *   pnpm prune:trades -- --hours 6 --apply     keep six hours of raw trades
+ *
+ * RUN `rollup:aggregates` FIRST. Nothing is deleted beyond the point the rollup has
+ * reached, whatever the retention window says, because a trade no candle covers is the
+ * only copy of that history and rebuilding it means re-reading the chain.
  *
  * WHY TRADES AND NOT TOKENS
  *
@@ -65,9 +69,38 @@ async function main(): Promise<void> {
   const prisma = getPrisma();
   const chainId = ROBINHOOD_CHAIN_ID;
 
-  const cutoff = new Date(Date.now() - days * 86_400_000);
-  console.log(`mode          : ${apply ? "APPLY" : "DRY RUN — nothing is deleted"}`);
-  console.log(`keeping       : trades newer than ${cutoff.toISOString()} (${days} days)`);
+  const hours = numberArg("hours", days * 24);
+  console.log(`mode          : ${apply ? "DELETE" : "DRY RUN — nothing is deleted"}`);
+
+  // The rollup boundary is the hard ceiling on what may be deleted.
+  //
+  // A trade that no candle covers is the only copy of that history: nothing can rebuild
+  // it except re-reading the chain, which for this range is days of RPC. So the cutoff
+  // is whichever is EARLIER — the retention window, or the point the rollup has
+  // actually reached.
+  const rolledRows = await prisma.$queryRaw<{ built: Date | null }[]>`
+    SELECT MAX("openTime") AS built FROM candles WHERE interval = 3600`;
+  const built = rolledRows[0]?.built ?? null;
+  if (built === null) {
+    console.log(
+      "\n  No hourly candles exist, so no trade is covered by an aggregate and\n" +
+        "  nothing can safely be deleted. Run `pnpm rollup:aggregates -- --apply` first.",
+    );
+    await prisma.$disconnect();
+    return;
+  }
+  // The candle at `built` covers [built, built + 1h), so everything before its end is
+  // aggregated.
+  const rolledThrough = new Date(built.getTime() + 3_600_000);
+
+  const byRetention = new Date(Date.now() - hours * 3_600_000);
+  const cutoff = byRetention < rolledThrough ? byRetention : rolledThrough;
+
+  console.log(`rolled up to  : ${rolledThrough.toISOString()}`);
+  console.log(
+    `retention     : ${hours}h, i.e. trades after ${byRetention.toISOString()}`,
+  );
+  console.log(`cutoff        : ${cutoff.toISOString()} (the earlier of the two)`);
   console.log(`exempt        : top ${keepTrending} tokens by trending score`);
 
   const sizeRows = await prisma.$queryRaw<{ size: string }[]>`
@@ -109,16 +142,14 @@ async function main(): Promise<void> {
     const spanRows = await prisma.$queryRaw<{ hours: number | null }[]>`
       SELECT EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) / 3600 AS hours
       FROM trades WHERE "chainId" = ${chainId}`;
-    const hours = spanRows[0]?.hours ?? null;
-    if (hours !== null && hours > 0 && hours < days * 24) {
-      const perHour = total / hours;
+    const span = spanRows[0]?.hours ?? null;
+    if (span !== null && span > 0 && span < hours) {
+      const perHour = total / span;
       console.log(
-        `  The stored trades span ${hours.toFixed(1)} hours — less than the ${days}-day\n` +
+        `  The stored trades span ${span.toFixed(1)} hours — less than the ${hours}-hour\n` +
           `  window — so nothing is old enough to remove. At ${Math.round(perHour)} trades an hour\n` +
-          `  this chain produces roughly 27 MB of trade data per hour, which is why the\n` +
-          `  database fills long before any of it reaches ${days} days old.\n\n` +
-          `  A retention window only frees space if it is SHORTER than what fits. Try\n` +
-          `  --days 1, or move to a database that can hold the history you want.`,
+          `  this chain produces roughly 27 MB of trade data per hour (R42).\n\n` +
+          `  A window only frees space if it is SHORTER than what fits. Try --hours 6.`,
       );
     }
     await prisma.$disconnect();

@@ -1150,9 +1150,29 @@ headroom — see the migration for the measurements). `prune:trades` deletes old
 while exempting the top tokens by trending score, and keeps every token row, because
 tokens are 27 MB against trades' 426 MB and are what every page and link depends on.
 
-**What was not done, and cannot be.** Made this fit. 27 MB/hour against a 512 MB
-ceiling is arithmetic, and no retention policy changes it. The options are a database
-sized for the data, or storing aggregates instead of raw trades — `VolumeSnapshot` and
-`Candle` exist in the schema for exactly that and are still unwritten. Keeping a short
-window of raw trades behind hourly aggregates would cut the per-hour cost by orders of
-magnitude and is the design the schema already anticipates.
+**The way out, now built.** Aggregates. An hour of one token's trading collapses from
+hundreds of ~1 KB trade rows to two small ones, and `candles` and `volume_snapshots`
+have been in the schema for this since it was written.
+
+- `pnpm rollup:aggregates -- --apply` builds hourly candles (open/high/low/close plus
+  volume — the reason a chart becomes possible) and hourly volume snapshots (volume,
+  the buy/sell split and DISTINCT traders — the inputs `scoreTrending` needs and a
+  candle cannot supply). Only complete hours are built; the newest hour is still
+  filling and freezing it would contradict the trades still arriving.
+- `pnpm prune:trades -- --hours 6 --apply` then deletes the raw trades those aggregates
+  cover.
+
+**The interlock that makes it safe.** `prune:trades` will not delete past the point the
+rollup has reached, whatever the retention window says. A trade no candle covers is the
+only copy of that history, and rebuilding it means re-reading the chain — days of RPC
+for this range. With no candles at all it refuses outright and says to run the rollup
+first.
+
+**Order matters, because the database is nearly full.** Drop the unused indexes first
+(45 MB), then roll up, then prune. The rollup needs room to write before the prune can
+free any, and both are resumable: if the rollup runs out of space part way, prune what
+it has covered and continue.
+
+**Still true afterwards.** Aggregates slow the growth by a large factor; they do not
+make it zero, and they do not reach R39. Covering the ~38M unindexed blocks is a
+different order of magnitude again.
