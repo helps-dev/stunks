@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   useAccount,
   useBalance,
@@ -28,6 +28,110 @@ function shortAddress(address: string): string {
 interface ConnectWalletProps {
   /** Compact presentation for global navigation; all chain guards remain identical. */
   readonly compact?: boolean;
+}
+
+type Connector = ReturnType<typeof useConnect>["connectors"][number];
+
+/**
+ * The wallet chooser.
+ *
+ * A native `<dialog>` opened with `showModal()`, rather than a div with a high
+ * z-index. That hands over focus trapping, Escape to close, inert background content
+ * and a real `::backdrop` — all of which a hand-rolled overlay has to reimplement, and
+ * usually only partly.
+ *
+ * It is also why this cannot disturb the page: a modal dialog is taken out of the
+ * document flow entirely. The first version of this was a dropdown in the header's
+ * flex row, and with eight wallets discovered it grew the header by four hundred
+ * pixels and pushed the whole page down.
+ */
+function WalletDialog({
+  open,
+  onClose,
+  connectors,
+  busy,
+  pendingName,
+  onPick,
+}: {
+  readonly open: boolean;
+  readonly onClose: () => void;
+  readonly connectors: readonly Connector[];
+  readonly busy: boolean;
+  readonly pendingName?: string | undefined;
+  readonly onPick: (connector: Connector) => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  return (
+    <dialog
+      ref={ref}
+      className="wallet-dialog"
+      // Escape fires `cancel`, and the browser closes the dialog itself; this keeps
+      // React's state in step rather than letting the two disagree.
+      onCancel={onClose}
+      onClose={onClose}
+      // The dialog element fills the viewport for hit-testing, so a click landing on
+      // the element itself — rather than on the card inside it — is a backdrop click.
+      onClick={(event) => {
+        if (event.target === ref.current) onClose();
+      }}
+    >
+      <div className="wallet-dialog-card">
+        <header className="wallet-dialog-head">
+          <div>
+            <h2>Connect wallet</h2>
+            <p>Choose a wallet to continue.</p>
+          </div>
+          <button
+            type="button"
+            className="wallet-dialog-close"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </header>
+
+        <ul className="wallet-list" role="list">
+          {connectors.map((connector) => (
+            <li key={connector.uid}>
+              <button
+                type="button"
+                className="wallet-option"
+                disabled={busy}
+                onClick={() => onPick(connector)}
+              >
+                {connector.icon ? (
+                  // A plain <img>, not next/image: the wallet supplies this over
+                  // EIP-6963 as a data URI, which the image optimiser cannot process
+                  // and does not need to.
+                  <img src={connector.icon} alt="" width={28} height={28} />
+                ) : (
+                  <span className="wallet-option-blank" aria-hidden="true" />
+                )}
+                <span className="wallet-option-name">{connector.name}</span>
+                <span className="wallet-option-action">
+                  {busy && pendingName === connector.name ? "Waiting…" : "Connect"}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        <p className="wallet-dialog-foot">
+          STUNKS never sees your keys and cannot move your funds. Every action is signed
+          in your own wallet.
+        </p>
+      </div>
+    </dialog>
+  );
 }
 
 export function ConnectWallet({ compact = false }: ConnectWalletProps) {
@@ -76,43 +180,22 @@ export function ConnectWallet({ compact = false }: ConnectWalletProps) {
           type="button"
           className="btn btn-primary btn-wallet"
           disabled={isPending || none}
-          aria-expanded={picking}
-          onClick={() => setPicking((open) => !open)}
+          onClick={() => setPicking(true)}
         >
-          {isPending
-            ? `Check ${pendingName ?? "wallet"}…`
-            : picking
-              ? "Choose a wallet"
-              : "Connect wallet"}
+          {isPending ? `Check ${pendingName ?? "wallet"}…` : "Connect wallet"}
         </button>
 
-        {picking && !none && (
-          <ul className="wallet-picker" role="list">
-            {available.map((connector) => (
-              <li key={connector.uid}>
-                <button
-                  type="button"
-                  className="wallet-option"
-                  disabled={isPending}
-                  onClick={() => {
-                    setPicking(false);
-                    connect({ connector });
-                  }}
-                >
-                  {connector.icon ? (
-                    // A plain <img>, not next/image: the wallet supplies this over
-                    // EIP-6963 as a data URI, which the image optimiser cannot process
-                    // and does not need to.
-                    <img src={connector.icon} alt="" width={20} height={20} />
-                  ) : (
-                    <span className="wallet-option-blank" aria-hidden="true" />
-                  )}
-                  <span>{connector.name}</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
+        <WalletDialog
+          open={picking}
+          onClose={() => setPicking(false)}
+          connectors={available}
+          busy={isPending}
+          pendingName={pendingName}
+          onPick={(connector) => {
+            setPicking(false);
+            connect({ connector });
+          }}
+        />
 
         {none && !compact && (
           <p className="hint">

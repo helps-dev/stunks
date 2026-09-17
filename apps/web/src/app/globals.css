@@ -2511,74 +2511,149 @@ table.compact td {
   line-height: 1.45;
 }
 
-/* Wallet picker: one row per wallet the browser announced, plus the configured ones. */
-
-/*
- * In the header the list OVERLAYS the page; it must not take part in layout.
+/* ── wallet chooser ──────────────────────────────────────────────────────────
  *
- * Without this it sat in the normal flow, grew the header's flex row by its own
- * height, and pushed the whole page down — leaving a tall black gap above the logo
- * with the list floating in it. Eight wallets made the header about 400px tall.
+ * A native <dialog>. Being a modal dialog it is outside the document flow, so it
+ * cannot affect layout however many wallets a browser announces — which the first
+ * version, a dropdown inside the header's flex row, very much did.
  */
-.wallet-compact {
-  position: relative;
+.wallet-dialog {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  /*
+   * Centred explicitly. A modal <dialog> is centred by the UA through `inset: 0` plus
+   * `margin: auto`, and overriding max-width or max-height is enough to lose that —
+   * the card then sits in the top-left corner. Stating both restores it.
+   */
+  inset: 0;
+  margin: auto;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 32px);
+  overflow: auto;
 }
 
-.wallet-compact .wallet-picker {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  z-index: 80;
-  min-width: 210px;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+.wallet-dialog::backdrop {
+  background: rgba(3, 6, 4, 0.72);
+  backdrop-filter: blur(6px);
 }
 
-.wallet-picker {
+.wallet-dialog-card {
+  width: min(400px, calc(100vw - 32px));
+  padding: 20px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  box-shadow: 0 30px 70px rgba(0, 0, 0, 0.6);
+}
+
+.wallet-dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.wallet-dialog-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 500;
+}
+
+.wallet-dialog-head p {
+  margin: 4px 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.wallet-dialog-close {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.wallet-dialog-close:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.wallet-list {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin: 6px 0 0;
-  padding: 4px;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
   list-style: none;
-  background: var(--surface-raised);
-  border: 1px solid var(--border);
-  border-radius: 10px;
 }
 
 .wallet-option {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   width: 100%;
-  padding: 8px 10px;
-  background: transparent;
-  border: 0;
-  border-radius: 7px;
+  padding: 11px 13px;
+  background: var(--surface-soft);
+  border: 1px solid transparent;
+  border-radius: 11px;
   color: var(--text);
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 0.86rem;
   text-align: left;
   cursor: pointer;
 }
 
 .wallet-option:hover:not(:disabled) {
-  background: var(--surface-soft);
+  border-color: var(--border-strong);
+  background: var(--surface-inset);
 }
 
 .wallet-option:disabled {
-  opacity: 0.5;
+  opacity: 0.55;
   cursor: default;
 }
 
 .wallet-option img {
-  border-radius: 5px;
+  border-radius: 7px;
   flex-shrink: 0;
 }
 
 .wallet-option-blank {
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
-  background: var(--surface-soft);
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: var(--surface-inset);
   flex-shrink: 0;
+}
+
+.wallet-option-name {
+  flex: 1;
+}
+
+/* The affordance, kept quiet until the row is hovered. */
+.wallet-option-action {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.wallet-option:hover:not(:disabled) .wallet-option-action {
+  color: var(--brand);
+}
+
+.wallet-dialog-foot {
+  margin: 16px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.55;
+  color: var(--muted);
 }
