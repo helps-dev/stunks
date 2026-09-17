@@ -29,6 +29,13 @@ export interface LaunchRecordInput {
   readonly telegramUrl?: string;
   readonly discordUrl?: string;
   readonly farcasterUrl?: string;
+  /**
+   * When the launch calldata was examined for the fields above.
+   *
+   * Set even when nothing was found: the calldata of a mined transaction cannot
+   * change, so a miss is permanent and the backfill must not pay for it twice.
+   */
+  readonly metadataCheckedAt?: Date;
 
   readonly creatorAddress: string;
   readonly deployerAddress: string;
@@ -129,6 +136,7 @@ export class TokenRepository {
             telegramUrl: input.telegramUrl ?? null,
             discordUrl: input.discordUrl ?? null,
             farcasterUrl: input.farcasterUrl ?? null,
+            metadataCheckedAt: input.metadataCheckedAt ?? null,
 
             creatorAddress,
             deployerAddress: input.deployerAddress.toLowerCase(),

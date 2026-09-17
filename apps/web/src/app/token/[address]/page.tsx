@@ -24,6 +24,8 @@ import {
 } from "@stunks/utils";
 import { getChainContracts } from "@stunks/config";
 import { tokenDetail, tokenHolders, tokenTrades } from "@/lib/queries";
+import { TokenAvatar } from "@/components/token-avatar";
+import { TokenLinks } from "@/components/token-links";
 import { TradePanel } from "./trade-panel";
 
 /**
@@ -243,12 +245,11 @@ export default async function TokenPage({ params }: PageProps) {
     <main className="token-page">
       <div className="tokenhead">
         <div className="token-identity">
-          <span className="token-avatar token-avatar-lg" aria-hidden="true">
-            {token.symbol
-              .replace(/[^a-z0-9]/gi, "")
-              .slice(0, 2)
-              .toUpperCase() || "?"}
-          </span>
+          <TokenAvatar
+            symbol={token.symbol}
+            imageUrl={token.imageUrl}
+            className="token-avatar-lg"
+          />
           <div>
             <p className="page-kicker">Live Pons V2 launch</p>
             <h1>{withDollar(token.symbol)}</h1>
@@ -270,6 +271,15 @@ export default async function TokenPage({ params }: PageProps) {
           />
         </div>
       </div>
+
+      <TokenLinks
+        description={token.description}
+        websiteUrl={token.websiteUrl}
+        twitterUrl={token.twitterUrl}
+        telegramUrl={token.telegramUrl}
+        discordUrl={token.discordUrl}
+        farcasterUrl={token.farcasterUrl}
+      />
 
       <section className="token-trade-section">
         <div className="section-heading">

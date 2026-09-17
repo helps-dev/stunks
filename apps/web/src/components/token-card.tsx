@@ -5,6 +5,7 @@ import {
   formatRelativeTime,
   shortAddress,
 } from "@stunks/utils";
+import { TokenAvatar } from "@/components/token-avatar";
 import type { SerialisedToken } from "@/lib/queries";
 
 /**
@@ -14,9 +15,11 @@ import type { SerialisedToken } from "@/lib/queries";
  * no placeholder figures: a token with no trades shows a zero volume, not a plausible
  * invented one.
  *
- * The avatar is a deterministic symbol mark rather than loading an arbitrary metadata
- * image URL. Token image URLs are untrusted content; a visual fallback must never make
- * a card slower, break its layout, or imply that an image was verified by STUNKS.
+ * The avatar shows the creator's image when one was recovered from the launch
+ * calldata, over a deterministic letter mark that stays visible when it was not.
+ * Token image URLs are untrusted content: they are proxied, never hotlinked, and the
+ * fallback is CSS rather than an error handler, so a dead host cannot make a card
+ * slower, break its layout, or imply that an image was verified by STUNKS.
  */
 
 const PHASE_LABEL: Record<string, { text: string; tone: string }> = {
@@ -35,12 +38,6 @@ export function TokenCard({ token }: { token: SerialisedToken }) {
   const quoteDecimals = token.pairTokenDecimals;
   const isNative = /^0x0{40}$/i.test(token.pairTokenAddress);
   const quoteSymbol = isNative ? "ETH" : "quote";
-  const avatar =
-    token.symbol
-      .replace(/[^a-z0-9]/gi, "")
-      .slice(0, 2)
-      .toUpperCase() || "?";
-
   return (
     <a
       href={`/token/${token.address}`}
@@ -54,9 +51,7 @@ export function TokenCard({ token }: { token: SerialisedToken }) {
     >
       <div className="card-head">
         <div className="card-title">
-          <span className="token-avatar" aria-hidden="true">
-            {avatar}
-          </span>
+          <TokenAvatar symbol={token.symbol} imageUrl={token.imageUrl} />
           <span className="card-title-copy">
             <span className="card-symbol">{displaySymbol(token.symbol)}</span>
             <span className="card-name">{token.name}</span>

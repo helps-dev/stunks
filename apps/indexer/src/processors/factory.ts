@@ -7,6 +7,8 @@ import {
   parseGraduationPhase,
   readCurveState,
   readLaunchedToken,
+  extractLaunchMetadata,
+  normaliseImageUrl,
 } from "@stunks/pons";
 import { priceFromReserves, marketCapFromPrice } from "../pricing.js";
 import type { BlockTimeCache } from "../block-cache.js";
@@ -145,12 +147,19 @@ async function prepareLaunch(
       return null;
     }
 
-    const [metadata, curveState, pairTokenDecimals, blockTime] = await Promise.all([
-      readTokenMetadata(deps.client, token),
-      readCurveState(deps.client, curve),
-      readPairTokenDecimals(deps.client, pairToken),
-      deps.blockTimes.get(raw.blockNumber),
-    ]);
+    const [metadata, curveState, pairTokenDecimals, blockTime, launchCalldata] =
+      await Promise.all([
+        readTokenMetadata(deps.client, token),
+        readCurveState(deps.client, curve),
+        readPairTokenDecimals(deps.client, pairToken),
+        deps.blockTimes.get(raw.blockNumber),
+        // The image, description and socials exist ONLY here. They are arguments to
+        // the launch transaction: not in the factory record, not in TokenLaunched,
+        // not in contract storage. One extra read per launch is what they cost, and
+        // a failure is not fatal — a token with no image is still a correct token,
+        // so this resolves to null rather than rejecting the whole launch.
+        readLaunchCalldata(deps.client, raw.transactionHash),
+      ]);
 
     // Verified identity: supply * phantom / (phantom + threshold). Recomputed rather
     // than read, so a mismatch surfaces as a bug instead of being papered over.
@@ -174,6 +183,7 @@ async function prepareLaunch(
       name: metadata.name,
       symbol: metadata.symbol,
       decimals: metadata.decimals,
+      ...recoverLaunchMetadata(launchCalldata, metadata),
 
       creatorAddress: launch.creatorFeeRecipient,
       deployerAddress: deployer,
@@ -251,6 +261,64 @@ function phaseToDb(phase: number): DbPhase {
     default:
       throw new Error(`Unmapped graduation phase ${phase}`);
   }
+}
+
+/**
+ * The launch transaction's input, or null if it cannot be fetched.
+ *
+ * Never throws. An RPC that will not return a transaction it certainly has is a
+ * reason to index the launch without its picture, not a reason to drop the launch.
+ */
+async function readLaunchCalldata(
+  client: PublicClient,
+  transactionHash: string,
+): Promise<string | null> {
+  try {
+    const tx = await client.getTransaction({ hash: transactionHash as `0x${string}` });
+    return tx.input;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Image, description and socials, recovered from the launch calldata.
+ *
+ * `metadataCheckedAt` is set whether or not anything was found, because the calldata
+ * of a mined transaction does not change: a miss here is permanent, and the backfill
+ * script must not spend another RPC call rediscovering it.
+ */
+function recoverLaunchMetadata(
+  calldata: string | null,
+  identity: { name: string; symbol: string },
+): Partial<LaunchRecordInput> {
+  if (calldata === null) return {};
+  const meta = extractLaunchMetadata(calldata, identity);
+  const checked = { metadataCheckedAt: new Date() };
+  if (meta === null) return checked;
+
+  // Keys are assigned only when there is a value. Under `exactOptionalPropertyTypes`
+  // an explicit `undefined` is not the same as an absent key, and the repository
+  // turns an absent key into a NULL column — which is what a blank field means.
+  const out: Record<string, string> = {};
+  const set = (key: string, value: string): void => {
+    const trimmed = value.trim();
+    if (trimmed !== "") out[key] = trimmed.slice(0, 1024);
+  };
+
+  // Normalised on the way in, so the page never has to interpret `ipfs://` and a
+  // value that is not a usable image URL is stored as absent rather than as text
+  // that would fail in an <img> on every page view.
+  const image = normaliseImageUrl(meta.logo);
+  if (image !== null) out.imageUrl = image;
+  set("description", meta.description);
+  set("websiteUrl", meta.socials.website);
+  set("twitterUrl", meta.socials.twitter);
+  set("telegramUrl", meta.socials.telegram);
+  set("discordUrl", meta.socials.discord);
+  set("farcasterUrl", meta.socials.farcaster);
+
+  return { ...checked, ...out };
 }
 
 async function readTokenMetadata(client: PublicClient, token: Address) {

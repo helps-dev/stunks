@@ -10,6 +10,7 @@ export * from "./client/reads.js";
 export * from "./launch/exemptions.js";
 export * from "./launch/builder.js";
 export * from "./launch/tx-state.js";
+export * from "./launch/metadata.js";
 
 // Curve: exact math, snipe tax, quoting.
 export * from "./curve/math.js";

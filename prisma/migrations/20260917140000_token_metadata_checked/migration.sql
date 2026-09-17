@@ -1,0 +1,12 @@
+-- Records that a token's launch calldata has been examined for image/description/socials.
+--
+-- Those fields are arguments to the launch transaction. They are not in contract
+-- storage and not in any event, so the only way to read them is to fetch the launch
+-- transaction and decode its calldata — one RPC call per token. Without this column a
+-- backfill cannot tell "never looked" from "looked, found nothing", and would spend
+-- that call again on every run for every token whose launch was wrapped in a shape the
+-- extractor does not recognise.
+--
+-- Nullable with no default, so existing rows read as "never examined" and the backfill
+-- picks them up. Adding a nullable column without a default does not rewrite the table.
+ALTER TABLE "tokens" ADD COLUMN "metadataCheckedAt" TIMESTAMP(3);

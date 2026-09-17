@@ -1176,3 +1176,81 @@ it has covered and continue.
 **Still true afterwards.** Aggregates slow the growth by a large factor; they do not
 make it zero, and they do not reach R39. Covering the ~38M unindexed blocks is a
 different order of magnitude again.
+
+## R43 — Token images were never indexed, and the column looked like a decision
+
+**Status: fixed.** `Token.imageUrl` existed from the first migration and was NULL on
+all 24,762 rows. The card rendered a letter mark and a comment explained the fallback
+as a deliberate refusal to load untrusted image URLs — which read as a policy but was
+actually a description of an empty column. There was no image URL to refuse.
+
+The cause: `logo`, `description` and five social links are ARGUMENTS to the launch
+transaction. They are not written to contract storage, not emitted in `TokenLaunched`,
+and not returned by `getLaunchedToken`. The indexer read the ERC-20's name, symbol,
+decimals and supply, which is everything the chain exposes through a read — and none
+of it is the image.
+
+`Token.launchTxHash` was stored all along, so every image was one
+`eth_getTransactionByHash` away.
+
+**Why the fix does not decode by function signature.** Launching is permissionless and
+anyone may wrap it. Across the 60 most recent launches there are SEVEN entry points:
+the router this repo has an ABI for (60%), a second router whose ABI is not published
+(30%), Multicall3, and three aggregators. `decodeFunctionData` recovers under half,
+and would silently stop working for new tokens the day Pons ships another router.
+
+`extractLaunchMetadata` instead scans the calldata for ABI-encoded strings and anchors
+on the token's real `name` and `symbol` read from the ERC-20. Finding that pair
+adjacent identifies the tuple exactly; `logo` follows. No anchor, no guess: 87.5% of
+24,926 tokens recovered, across routers whose ABI is unknown.
+
+## R44 — Public IPFS gateways cannot serve a launchpad's images
+
+**Status: mitigated, and worth watching.** Most token logos are `ipfs://`. Measured
+against a live token CID, three of six public gateways returned 429, one did not
+respond at all, and the two that worked took 2.6 s and 4.5 s. A single hardcoded
+gateway would have failed most images.
+
+The image reference is therefore stored as written (`ipfs://<cid>`), never as a
+gateway URL — otherwise a gateway outage becomes a migration over 26,000 rows. Gateway
+choice and order live in `imageFetchCandidates` and the proxy tries them within one
+deadline.
+
+Two bugs were found only by measuring the real thing, and both had failed silently:
+
+  - `redirect: "manual"` rejected 4everland, which answers 301 to its own subdomain
+    gateway. Redirects are now followed by hand with every hop re-validated, which
+    keeps the SSRF protection that `manual` was there for.
+  - The per-attempt timeout was 4 s, just under Pinata's typical 4.5 s, so the most
+    reliable gateway looked like the least reliable one.
+
+The proxy reported only the LAST failure, so both of these appeared as `ipfs.io`
+returning 429 — pointing at rate limiting when neither cause was rate limiting. It now
+reports every gateway's own outcome in `X-Image-Miss`.
+
+Before: 3 of 18 served. After: 17 of 19.
+
+**Remaining exposure.** These are free public gateways with no SLA. Vercel's CDN caches
+a hit for a week, so steady-state traffic is light, but a cold cache after a deploy
+depends on hosts nobody here controls. A dedicated gateway with an API key is the
+durable answer if images matter commercially.
+
+## R45 — Token image bytes are capped by the platform, not by preference
+
+**Status: accepted.** A Vercel serverless function cannot return a body larger than
+4.5 MB, so the proxy caps at 4 MB and a larger image falls back to the letter mark.
+This is not theoretical: one live token ships a 3.8 MB PNG and another a 2.8 MB one —
+creators upload full-resolution artwork for a 37-pixel avatar. The earlier 3 MB cap,
+chosen as "larger than any legitimate token logo", would have dropped both.
+
+Resizing on the proxy would fix the waste as well as the cap. It is not done here
+because it means a native image codec in a serverless function, and the cap is not
+currently the binding constraint on how the grid looks.
+
+## R46 — SVG token images are not rendered
+
+**Status: deliberate.** The proxy serves images same-origin, which is what keeps the
+CSP at `img-src 'self'` and keeps visitor IPs away from creator-chosen hosts. An SVG
+is a document and can carry `<script>`, and same-origin is exactly where that script
+would run. The allowlist is PNG, JPEG, GIF, WebP and AVIF. This costs a small number
+of legitimate logos and removes stored XSS from the threat model.

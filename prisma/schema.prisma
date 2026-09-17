@@ -102,6 +102,16 @@ model Token {
   discordUrl   String?
   farcasterUrl String?
 
+  /// When the launch calldata was examined for the metadata above.
+  ///
+  /// The image, description and socials are arguments to the launch transaction —
+  /// never stored on the contract, never emitted — so recovering them costs one
+  /// `eth_getTransactionByHash` per token. This records that the call was made, so a
+  /// token whose calldata yielded nothing is not re-fetched on every backfill run.
+  /// NULL means never examined; a timestamp with a NULL `imageUrl` means examined and
+  /// nothing usable was there.
+  metadataCheckedAt DateTime?
+
   // ── on-chain canonical: the launch record ──
   creatorAddress    String
   deployerAddress   String

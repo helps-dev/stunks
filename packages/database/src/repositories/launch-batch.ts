@@ -163,6 +163,7 @@ function toTokenRow(
     telegramUrl: input.telegramUrl ?? null,
     discordUrl: input.discordUrl ?? null,
     farcasterUrl: input.farcasterUrl ?? null,
+    metadataCheckedAt: input.metadataCheckedAt ?? null,
 
     creatorAddress: input.creatorAddress.toLowerCase(),
     deployerAddress: input.deployerAddress.toLowerCase(),

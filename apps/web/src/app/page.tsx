@@ -13,6 +13,7 @@ import { readChainSnapshot } from "@/lib/read-chain";
 import heroBackdrop from "../../../../Asset/banner-stunks.png";
 import heroLogo from "../../../../Asset/logo-transparent.png";
 import { exploreTokens, platformStats } from "@/lib/queries";
+import { TokenAvatar } from "@/components/token-avatar";
 
 /**
  * STUNKS landing page.
@@ -313,9 +314,10 @@ export default async function Page() {
                       <td className="source">{index + 1}</td>
                       <td>
                         <div className="home-token-cell">
-                          <span className="token-avatar">
-                            {token.symbol.slice(0, 2).toUpperCase()}
-                          </span>
+                          <TokenAvatar
+                            symbol={token.symbol}
+                            imageUrl={token.imageUrl}
+                          />
                           <span>
                             <span className="home-token-symbol">{token.symbol}</span>
                             <span className="home-token-name">{token.name}</span>
