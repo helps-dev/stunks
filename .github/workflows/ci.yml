@@ -64,6 +64,9 @@ jobs:
       - name: Generate Prisma client
         run: pnpm prisma:generate
 
+      # Runs the workspaces and then the root tsconfig, which covers scripts/ —
+      # verify-pons.ts, moderate.ts and the price recompute all live outside every
+      # workspace and were previously checked only by being run.
       - name: Typecheck
         run: pnpm typecheck
 

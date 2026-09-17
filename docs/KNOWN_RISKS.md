@@ -1045,15 +1045,29 @@ assuming 18 — a display off by 1e9 is not a rounding difference.
 
 **Migration required, and NOT performed.** `price` is a fixed-point integer whose scale
 is not stored beside it, so rows written under the old scale are not comparable with
-new ones. `scripts/recompute-prices.ts` restates them from `quoteAmount` and
-`tokenAmount`, which are untouched chain data:
+new ones. Two different problems live in those rows, and the counts are worth keeping
+apart (measured 2026-09-17, 439,520 trades):
+
+|                                          | trades    |                                             |
+| ---------------------------------------- | --------- | ------------------------------------------- |
+| price 0 although both legs were non-zero | **2,144** | 0.5% — the old scale destroyed these        |
+| price > 0                                | 437,376   | the same real price at a coarser resolution |
+
+Only the first group lost information. The second is recoverable by arithmetic alone —
+but it still has to be restated, because a column holding both scales at once sorts and
+compares nonsense.
+
+`scripts/recompute-prices.ts` restates them from `quoteAmount` and `tokenAmount`, which
+are untouched chain data:
 
 ```bash
 pnpm recompute:prices -- --dry-run
 pnpm recompute:prices -- --apply
 ```
 
-Stop the indexer first. Until it is run, prices are a mix of two scales.
+Stop the indexer first — it writes the same rows. Measured against the live database,
+the dry run examines about 20,000 trades in 29 seconds, and slows when it competes with
+the indexer for connections. Until it is run, prices are a mix of two scales.
 
 **Still open — cross-asset comparability.** `marketCap` and `volume` are denominated in
 each token's own quote asset, and Explore sorts and sums them together. A cap in
