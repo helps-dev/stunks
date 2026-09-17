@@ -40,6 +40,7 @@
  * normalisation denominators.
  */
 
+import { Prisma } from "@prisma/client";
 import {
   DEFAULT_TRENDING_WEIGHTS,
   getPrisma,
@@ -48,8 +49,14 @@ import {
 } from "@stunks/database";
 import { ROBINHOOD_CHAIN_ID } from "@stunks/config";
 
-/** Rows written per statement. Small enough to stay friendly on a pooled connection. */
-const WRITE_CHUNK = 500;
+/**
+ * Scores written per statement.
+ *
+ * A statement count, not a concurrency level — the chunks go out one after another.
+ * The distinction is the whole bug this replaced: the first version fired this many
+ * queries AT ONCE against a pool with a connection limit of 5.
+ */
+const WRITE_CHUNK = 1_000;
 
 function flag(name: string): boolean {
   return process.argv.includes(`--${name}`);
@@ -204,33 +211,41 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Everything outside the cohort goes back to zero, so a token that stopped trading
-  // stops being ranked instead of keeping yesterday's score forever.
+  // Clear first, then set. A token that stopped trading stops being ranked instead of
+  // keeping yesterday's score forever, and doing it in two steps avoids a NOT IN list
+  // of ten thousand ids.
   const cleared = await prisma.token.updateMany({
-    where: {
-      chainId,
-      trendingScore: { gt: 0 },
-      id: { notIn: scored.map((s) => s.tokenId) },
-    },
+    where: { chainId, trendingScore: { gt: 0 } },
     data: { trendingScore: 0 },
   });
 
+  // One statement per chunk, not one query per token.
+  //
+  // This was `Promise.all` over 500 `token.update` calls — 500 concurrent queries
+  // against a Prisma pool whose connection limit is 5. All but five queued and timed
+  // out:
+  //
+  //   Timed out fetching a new connection from the connection pool
+  //   (Current connection pool timeout: 10, connection limit: 5)
+  //
+  // Writing a different value to each of many rows is what `UPDATE ... FROM (VALUES)`
+  // is for, and it is the shape `TradeBatchRepository.updateStatsMany` already uses.
+  // The scoring itself stays in TypeScript: normalisation is cohort-relative and
+  // belongs with `scoreTrending`, not in SQL.
   let written = 0;
   for (let offset = 0; offset < scored.length; offset += WRITE_CHUNK) {
     const chunk = scored.slice(offset, offset + WRITE_CHUNK);
-    await Promise.all(
-      chunk.map((entry) =>
-        prisma.token.update({
-          where: { id: entry.tokenId },
-          // scoreBps is 0..10000; the column is Decimal(20,8) so it lands exactly.
-          data: { trendingScore: entry.scoreBps.toString() },
-        }),
-      ),
+    const values = chunk.map(
+      (entry) => Prisma.sql`(${entry.tokenId}, ${entry.scoreBps.toString()}::numeric)`,
     );
-    written += chunk.length;
+    written += await prisma.$executeRaw`
+      UPDATE tokens AS t
+      SET "trendingScore" = v.score
+      FROM (VALUES ${Prisma.join(values)}) AS v(id, score)
+      WHERE t.id = v.id`;
   }
 
-  console.log(`\n  ${written} scores written, ${cleared.count} cleared`);
+  console.log(`\n  ${written} scores written, ${cleared.count} cleared first`);
   await prisma.$disconnect();
 }
 
