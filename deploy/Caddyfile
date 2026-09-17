@@ -11,8 +11,39 @@
 	encode zstd gzip
 
 	# The health endpoint is deliberately absent. It is an internal, unauthenticated
-	# operational view and stays bound to localhost on the VPS.
+	# operational view and stays bound to localhost on the VPS — enforced by
+	# HEALTH_HOST on the indexer, not by the absence of a route here.
 	reverse_proxy web:3000
+
+	# ── Rate limit ────────────────────────────────────────────────────────────────
+	#
+	# Every page is `force-dynamic`, so each request reaches the database and, on the
+	# landing page, the chain. Those chain reads go to the same free public endpoints
+	# the indexer depends on, and the indexer is already the constrained party: dRPC
+	# and OrdoFi had 5,314 and 4,975 recorded failures with the curve stream 715,288
+	# blocks behind. Without a limit here, holding down refresh is enough to take RPC
+	# budget away from the indexer.
+	#
+	# This needs the rate_limit module, which is not in the standard image:
+	#
+	#   docker build -t stunks-caddy - <<'EOF'
+	#   FROM caddy:2-builder AS builder
+	#   RUN xcaddy build --with github.com/mholt/caddy-ratelimit
+	#   FROM caddy:2-alpine
+	#   COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+	#   EOF
+	#
+	# Then point the caddy service at stunks-caddy. Until that image is built, leave
+	# this block commented out — Caddy refuses to start on an unknown directive, and
+	# an unstarted front door is worse than an unlimited one.
+	#
+	# rate_limit {
+	# 	zone per_ip {
+	# 		key    {remote_host}
+	# 		events 120
+	# 		window 1m
+	# 	}
+	# }
 
 	header {
 		# The app is a wallet dApp: only the user's own wallet signs, and no session
@@ -22,5 +53,30 @@
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
 		-Server
+
+		# ── Content-Security-Policy ───────────────────────────────────────────────
+		#
+		# The threat this addresses is specific, not generic. A wallet dApp asks the
+		# user to sign transactions that this page constructs. Script that should not
+		# be running — injected through a compromised dependency, or anything that
+		# reaches the DOM — can rewrite the `to`, `data` and `value` the wallet is
+		# handed, and the wallet will faithfully present whatever it is given. A CSP
+		# is what stops such script loading from somewhere else or exfiltrating to it.
+		#
+		# 'unsafe-inline' on script-src is required by Next's App Router, which emits
+		# inline bootstrap and streaming-payload scripts. Removing it needs nonces
+		# threaded through a middleware, which is worth doing and is not free.
+		#
+		# connect-src is deliberately narrow: 'self' for this app's own routes plus
+		# the RPC endpoints. It must be kept in step with NEXT_PUBLIC_RPC_ENDPOINTS —
+		# an endpoint added there and not here will fail in the browser with no
+		# explanation beyond a console message.
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://robinhood.drpc.org https://rpc.ordofi.network https://rpc.mainnet.chain.robinhood.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests"
+
+		# Nothing here needs a camera, a microphone, a location or a payment handler.
+		Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+
+		# Same intent as frame-ancestors above, for anything that predates CSP2.
+		Cross-Origin-Opener-Policy "same-origin"
 	}
 }

@@ -64,9 +64,8 @@ describe("RpcLogSource address filters", () => {
       "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
       "0x1111111111111111111111111111111111111111111111111111111111111111",
     ] as const;
-    const addresses = Array.from(
-      { length: MAX_LOG_ADDRESSES_PER_QUERY },
-      (_, index) => address(index + 1),
+    const addresses = Array.from({ length: MAX_LOG_ADDRESSES_PER_QUERY }, (_, index) =>
+      address(index + 1),
     );
 
     await source.getLogs({ fromBlock: 500n, toBlock: 500n, addresses, topics0: topics });

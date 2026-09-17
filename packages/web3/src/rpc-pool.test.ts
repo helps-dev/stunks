@@ -263,7 +263,6 @@ describe("adaptive log window", () => {
   });
 });
 
-
 describe("provider head disagreement", () => {
   it("fails over when an endpoint has not indexed a block another provider reported", async () => {
     // Observed near chain head: endpoint A supplies eth_blockNumber, but endpoint B
@@ -275,7 +274,10 @@ describe("provider head disagreement", () => {
         jsonResponse({
           jsonrpc: "2.0",
           id: 1,
-          error: { code: -32000, message: 'Block at number "63921610" could not be found.' },
+          error: {
+            code: -32000,
+            message: 'Block at number "63921610" could not be found.',
+          },
         }),
       )
       .mockResolvedValueOnce(jsonResponse({ jsonrpc: "2.0", id: 2, result: "0xabc" }));
@@ -286,9 +288,9 @@ describe("provider head disagreement", () => {
       sleep: noSleep,
     });
 
-    await expect(pool.request<string>("eth_getBlockByNumber", ["0x3", false])).resolves.toBe(
-      "0xabc",
-    );
+    await expect(
+      pool.request<string>("eth_getBlockByNumber", ["0x3", false]),
+    ).resolves.toBe("0xabc");
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(pool.stats()[0]).toMatchObject({
       consecutiveFailures: 1,
@@ -314,7 +316,11 @@ describe("provider head disagreement", () => {
       .fn()
       .mockResolvedValueOnce(jsonResponse({ jsonrpc: "2.0", id: 1, result: null }))
       .mockResolvedValueOnce(
-        jsonResponse({ jsonrpc: "2.0", id: 2, result: { number: "0x3", hash: "0xfeed" } }),
+        jsonResponse({
+          jsonrpc: "2.0",
+          id: 2,
+          result: { number: "0x3", hash: "0xfeed" },
+        }),
       );
 
     const pool = new RpcPool(["https://behind.example", "https://current.example"], {
@@ -350,31 +356,38 @@ describe("provider head disagreement", () => {
   });
 });
 
-
 describe("overloaded upstream log providers", () => {
   it.each([
     "the network is busy, please try again in a moment",
     "eth_getLogs: block 63961375 alone returns more logs than the upstream will serve. Add an address or topic filter.",
-  ])("fails over instead of shrinking an inherently unsupportable query: %s", async (message) => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(
-        jsonResponse({
-          jsonrpc: "2.0",
-          id: 1,
-          error: { code: -32000, message },
-        }),
-      )
-      .mockResolvedValueOnce(jsonResponse({ jsonrpc: "2.0", id: 2, result: [] }));
+  ])(
+    "fails over instead of shrinking an inherently unsupportable query: %s",
+    async (message) => {
+      const fetchImpl = vi
+        .fn()
+        .mockResolvedValueOnce(
+          jsonResponse({
+            jsonrpc: "2.0",
+            id: 1,
+            error: { code: -32000, message },
+          }),
+        )
+        .mockResolvedValueOnce(jsonResponse({ jsonrpc: "2.0", id: 2, result: [] }));
 
-    const pool = new RpcPool(["https://overloaded.example", "https://healthy.example"], {
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      attemptsPerEndpoint: 1,
-      sleep: noSleep,
-    });
+      const pool = new RpcPool(
+        ["https://overloaded.example", "https://healthy.example"],
+        {
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+          attemptsPerEndpoint: 1,
+          sleep: noSleep,
+        },
+      );
 
-    await expect(pool.request<readonly unknown[]>("eth_getLogs", [])).resolves.toEqual([]);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(pool.stats()[0]?.lastErrorKind).toBe("UPSTREAM_UNAVAILABLE");
-  });
+      await expect(pool.request<readonly unknown[]>("eth_getLogs", [])).resolves.toEqual(
+        [],
+      );
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(pool.stats()[0]?.lastErrorKind).toBe("UPSTREAM_UNAVAILABLE");
+    },
+  );
 });

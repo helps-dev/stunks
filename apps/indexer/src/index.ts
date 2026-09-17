@@ -130,13 +130,26 @@ async function main(): Promise<void> {
     });
   }
 
-  const healthServer = startHealthServer(config.HEALTH_PORT, {
-    chainId: config.CHAIN_ID,
-    repos,
-    pool,
-    chainHead: () => factorySource.head(),
+  const healthServer = startHealthServer(
+    config.HEALTH_PORT,
+    {
+      chainId: config.CHAIN_ID,
+      repos,
+      pool,
+      chainHead: () => factorySource.head(),
+    },
+    config.HEALTH_HOST,
+  );
+  log("health endpoint listening", {
+    host: config.HEALTH_HOST,
+    port: config.HEALTH_PORT,
+    path: "/health",
+    // Loud on purpose: this endpoint has no authentication in front of it.
+    note:
+      config.HEALTH_HOST === "127.0.0.1"
+        ? undefined
+        : "bound beyond loopback — this endpoint is unauthenticated",
   });
-  log("health endpoint listening", { port: config.HEALTH_PORT, path: "/health" });
 
   const factoryAddresses = async (): Promise<readonly Address[]> => [config.factory];
   /**
@@ -177,6 +190,15 @@ async function main(): Promise<void> {
       confirmationDepth: config.CONFIRMATION_DEPTH,
       addresses: factoryAddresses,
       topics0: factoryTopics,
+      // The factory stream owns tokens (and the creators attached to them). Trades go
+      // with them through the `onDelete: Cascade` on Trade.token, so they are not
+      // deleted separately here — a token that never launched cannot have traded.
+      deleteAbove: async (rollbackTo) => ({
+        tokens: await repos.tokens.deleteAboveBlock(config.CHAIN_ID, rollbackTo),
+      }),
+      // Removing those tokens invalidates any trade the curve stream already indexed
+      // for them, so the curve stream cannot be left claiming those blocks are done.
+      cascadeStreams: [STREAMS.curves],
       log,
       process: async (logs) => {
         const result = await processFactoryLogs(logs, {
@@ -213,6 +235,12 @@ async function main(): Promise<void> {
       // returns only Pons curve events, and the volume stays bounded by the block
       // window rather than by how many curves exist.
       requireAddresses: false,
+      // The curve stream owns trades and nothing else. It must NOT delete tokens: it
+      // runs far behind the factory by design, so a chain-scoped token delete here
+      // would erase launches the factory had already indexed and never re-scans.
+      deleteAbove: async (rollbackTo) => ({
+        trades: await repos.trades.deleteAboveBlock(config.CHAIN_ID, rollbackTo),
+      }),
       // Never scan past the factory: a trade needs its token to be indexed first.
       // Nothing else happens here — an earlier version also fast-forwarded the curve
       // checkpoint from inside this callback, which ran on every tick and could ask
@@ -257,7 +285,11 @@ async function main(): Promise<void> {
   // scanning them was measured at ~44 hours of finding nothing. Done once, at startup,
   // and it only ever moves the checkpoint forward.
   {
-    await repos.checkpoints.getOrCreate(config.CHAIN_ID, STREAMS.curves, config.startBlock);
+    await repos.checkpoints.getOrCreate(
+      config.CHAIN_ID,
+      STREAMS.curves,
+      config.startBlock,
+    );
     const earliest = await repos.tokens.earliestLaunchBlock(config.CHAIN_ID);
     if (earliest !== null && earliest > 0n) {
       const moved = await repos.checkpoints.fastForward({

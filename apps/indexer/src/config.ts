@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isAddress } from "viem";
 import {
   KNOWN_RPC_ENDPOINTS,
   ROBINHOOD_CHAIN_ID,
@@ -64,6 +65,31 @@ export const indexerEnvSchema = z.object({
   BACKFILL_ONLY: z.enum(["0", "1"]).default("0"),
 
   HEALTH_PORT: z.coerce.number().int().positive().default(9464),
+
+  /**
+   * Interface the health endpoint binds to. Loopback unless deliberately widened.
+   *
+   * Docker needs `0.0.0.0` to be probed from the host, and the compose file supplies
+   * it alongside a `127.0.0.1:` port mapping that keeps it off the internet. Outside a
+   * container, widening this exposes an unauthenticated operational view.
+   */
+  HEALTH_HOST: z.string().min(1).default("127.0.0.1"),
+
+  /**
+   * Optional override for the factory address.
+   *
+   * It exists so that all three entry points agree. The web app reads
+   * NEXT_PUBLIC_PONS_V2_FACTORY, `verify-pons` reads PONS_V2_FACTORY, and the indexer
+   * used to read neither — it took the compiled-in address and silently ignored what
+   * the environment said. A deployment that pointed the app at one factory and the
+   * indexer at another would have looked configured and indexed the wrong protocol.
+   *
+   * Supplying it is checked, not merely accepted: see below.
+   */
+  PONS_V2_FACTORY: z
+    .string()
+    .refine((value) => isAddress(value), { message: "must be a valid EVM address" })
+    .optional(),
 });
 
 export type IndexerEnv = z.infer<typeof indexerEnvSchema>;
@@ -95,6 +121,29 @@ export function loadIndexerConfig(
   }
 
   const contracts = getChainContracts(env.CHAIN_ID);
+
+  /**
+   * Refuse a factory the code was not built against, rather than quietly following it.
+   *
+   * The compiled-in address is not a default to be overridden casually: the deploy
+   * block, the verified ABIs and every fact in docs/PONS_V2_INTEGRATION.md were
+   * established against that specific deployment. Indexing a different factory with
+   * this address book would produce confident, wrong data — so a mismatch is a
+   * configuration error to be reported, not a preference to be honoured.
+   */
+  if (
+    env.PONS_V2_FACTORY !== undefined &&
+    env.PONS_V2_FACTORY.toLowerCase() !== contracts.ponsV2Factory.toLowerCase()
+  ) {
+    throw new Error(
+      `PONS_V2_FACTORY is ${env.PONS_V2_FACTORY}, but this build is verified against ` +
+        `${contracts.ponsV2Factory} on chain ${env.CHAIN_ID}.\n` +
+        `The deploy block, ABIs and documented facts all belong to that deployment, so ` +
+        `indexing a different factory with them would produce confident but wrong data.\n` +
+        `Either unset PONS_V2_FACTORY, or add the new deployment to CONTRACTS in ` +
+        `@stunks/config and re-run \`pnpm verify:pons\` against it first.`,
+    );
+  }
 
   return {
     ...env,

@@ -64,7 +64,7 @@ Delaying the launch by one preparation round trip costs nothing, because **the
 launch is not racing anyone — the launch is the thing being raced.**
 
 Steps 5 and 7 are separate transactions, and step 7 must be **fast**. The
-exemption is valid for the whole window, but the *advantage* is not evenly spread
+exemption is valid for the whole window, but the _advantage_ is not evenly spread
 across it: the tax a sniper would pay collapses from ~99% to 0.19% within two
 seconds. So the bundle needs to land at age 0–1, not merely inside the window.
 See "Timing is the whole game" below.
@@ -184,7 +184,7 @@ This is where the danger is:
 > simply transferred and **stranded** at the curve's future address.
 
 So buys must never be broadcast before the launch receipt is in hand. What can be
-moved earlier is all the *computation*, not the wait.
+moved earlier is all the _computation_, not the wait.
 
 ---
 
@@ -195,7 +195,7 @@ documented failure mode behind it. None are optional.
 
 **1. Fee cap, not gas price.** The launch transaction burns ~3.7M gas, which
 raises the next block's base fee above whatever was read before launch. A bundle
-priced on the pre-launch base fee fails *entirely and simultaneously* with
+priced on the pre-launch base fee fails _entirely and simultaneously_ with
 `fee cap cannot be lower than the block base fee`, and leaves no on-chain
 transaction to diagnose. Use EIP-1559 headroom:
 
@@ -211,7 +211,7 @@ is free.
 bundle longer than the entire 3-second window being contested.
 
 ```ts
-createPublicClient({ transport: http(rpc), pollingInterval: 100 })
+createPublicClient({ transport: http(rpc), pollingInterval: 100 });
 ```
 
 **3. Permutation-safe slippage floors.** N independent transactions are ordered by
@@ -242,7 +242,7 @@ possible moment to discover it.
 
 This distinction is the most important product decision in the feature.
 
-### Model 1 — one payer, N recipients  ✅ STUNKS builds this
+### Model 1 — one payer, N recipients ✅ STUNKS builds this
 
 One wallet — the creator's — pays for every buy, setting `recipient` to each
 whitelisted address in turn.
@@ -253,7 +253,7 @@ whitelisted address in turn.
 - Works because the exemption keys on `recipient` (verified)
 - Fully compatible with the non-custodial rule
 
-### Model 2 — N wallets each buying for themselves  ❌ STUNKS does not build this
+### Model 2 — N wallets each buying for themselves ❌ STUNKS does not build this
 
 This is what external sniper bots do, and what "pre-signed" means in
 `PONS-V2-BUNDLER.md`: 31 separate wallets, each signing its own transaction.

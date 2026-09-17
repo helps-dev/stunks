@@ -323,7 +323,10 @@ export class ExploreRepository {
    * no pair-token enumeration. A caller must re-check `approvedPairTokens` on-chain
    * before offering one as a selectable launch pair.
    */
-  async listSeenPairTokens(chainId: number, limit = 24): Promise<readonly SeenPairToken[]> {
+  async listSeenPairTokens(
+    chainId: number,
+    limit = 24,
+  ): Promise<readonly SeenPairToken[]> {
     const groups = await this.prisma.token.groupBy({
       by: ["pairTokenAddress", "pairTokenDecimals"],
       where: { chainId },

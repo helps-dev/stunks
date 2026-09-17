@@ -21,6 +21,11 @@ services:
     env_file: .env
     environment:
       HEALTH_PORT: "9464"
+      # 0.0.0.0 INSIDE the container only. A container has its own network namespace,
+      # so loopback there is unreachable from the host and the probe would always fail.
+      # What actually keeps this off the internet is the 127.0.0.1 port mapping below.
+      # Outside Docker the default is loopback; see HEALTH_HOST in the indexer config.
+      HEALTH_HOST: "0.0.0.0"
     # Bound to localhost, NOT published. The health endpoint reports checkpoints, RPC
     # endpoint URLs and failure counts — operational detail with no authentication in
     # front of it, so it must not be reachable from the internet. Read it over SSH:
@@ -67,7 +72,12 @@ services:
   # Set DOMAIN and ACME_EMAIL in .env first; Caddy then obtains and renews the
   # certificate on its own.
   caddy:
-    image: caddy:2-alpine
+    # Built rather than pulled so the rate-limit module is available. See
+    # deploy/caddy.Dockerfile for why, and for the two steps that turn it on.
+    build:
+      context: .
+      dockerfile: deploy/caddy.Dockerfile
+    image: stunks-caddy
     profiles: ["public"]
     restart: unless-stopped
     env_file: .env

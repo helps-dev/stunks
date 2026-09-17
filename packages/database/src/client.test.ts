@@ -20,8 +20,8 @@ describe("isDatabaseAvailabilityError", () => {
   });
 
   it("does not hide a data or query error as a temporary outage", () => {
-    expect(isDatabaseAvailabilityError(new Error("invalid input syntax for numeric"))).toBe(
-      false,
-    );
+    expect(
+      isDatabaseAvailabilityError(new Error("invalid input syntax for numeric")),
+    ).toBe(false);
   });
 });

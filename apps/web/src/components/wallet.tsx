@@ -52,7 +52,9 @@ export function ConnectWallet({ compact = false }: ConnectWalletProps) {
           {isPending ? "Check wallet…" : "Connect wallet"}
         </button>
         {!compact && !injected && (
-          <p className="hint">No browser wallet detected. Install one to launch or trade.</p>
+          <p className="hint">
+            No browser wallet detected. Install one to launch or trade.
+          </p>
         )}
         {compact && !injected && (
           <span className="wallet-compact-note" role="status">
@@ -67,8 +69,8 @@ export function ConnectWallet({ compact = false }: ConnectWalletProps) {
         )}
         {!compact && (
           <p className="hint">
-            STUNKS never asks for a private key or seed phrase, and cannot move your funds.
-            Every action is signed in your own wallet.
+            STUNKS never asks for a private key or seed phrase, and cannot move your
+            funds. Every action is signed in your own wallet.
           </p>
         )}
       </div>
@@ -79,12 +81,14 @@ export function ConnectWallet({ compact = false }: ConnectWalletProps) {
     return (
       <div className={compact ? "wallet wallet-compact" : "wallet"}>
         {!compact && <p className="badge warn">Wrong network</p>}
-        {compact && <span className="wallet-compact-note wallet-compact-error">Wrong network</span>}
+        {compact && (
+          <span className="wallet-compact-note wallet-compact-error">Wrong network</span>
+        )}
         {!compact && (
           <p className="hint">
             Your wallet is on chain {chainId}. STUNKS only works on Robinhood Chain (
-            {ROBINHOOD_CHAIN_ID}), and signing here could interact with a different contract
-            at the same address.
+            {ROBINHOOD_CHAIN_ID}), and signing here could interact with a different
+            contract at the same address.
           </p>
         )}
         <button

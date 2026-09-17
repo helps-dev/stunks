@@ -297,11 +297,13 @@ describe("buy — native quote asset", () => {
     if (!loose.ok || !tight.ok) return;
 
     const minOf = (data: `0x${string}`) =>
-      (decodeFunctionData({ abi: ponsV2CurveAbi, data }).args as readonly [
-        bigint,
-        bigint,
-        Address,
-      ])[1];
+      (
+        decodeFunctionData({ abi: ponsV2CurveAbi, data }).args as readonly [
+          bigint,
+          bigint,
+          Address,
+        ]
+      )[1];
 
     expect(minOf(tight.trade.data)).toBeGreaterThan(minOf(loose.trade.data));
   });

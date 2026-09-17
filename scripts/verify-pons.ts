@@ -47,6 +47,20 @@ import {
 
 let failures = 0;
 let checks = 0;
+let unverifiable = 0;
+
+/**
+ * A check that could not be run is NOT a pass and NOT a failure.
+ *
+ * The distinction is the whole point. A FAIL means a documented fact stopped being
+ * true; an UNVERIFIABLE means the endpoint could not answer, which says nothing about
+ * the fact either way. Collapsing the two would either raise false alarms or, worse,
+ * let a real drift hide behind an RPC outage.
+ */
+function skipped(label: string, detail: string): void {
+  unverifiable++;
+  console.log(`  ????  ${label}\n        could not verify: ${detail}`);
+}
 
 function pass(label: string, detail = ""): void {
   checks++;
@@ -65,6 +79,39 @@ function info(label: string, detail = ""): void {
 
 function section(title: string): void {
   console.log(`\n${title}\n${"─".repeat(title.length)}`);
+}
+
+/**
+ * Run one section, and let it fail without taking the rest of the run with it.
+ *
+ * This existed as a straight sequence of awaits, and the consequence showed up the
+ * moment the public endpoints changed underneath it. On 2026-09-17 dRPC stopped
+ * serving archive state at the factory's deploy block ("Unknown state. First available
+ * state is 1") and OrdoFi could not return the head block it had just reported. Either
+ * one aborted the process at section 2 of 8, so none of the ~30 checks that need only
+ * current state ran at all — and the README's "35 checks, 0 failed" stopped being
+ * reproducible without anyone noticing a documented fact had changed.
+ *
+ * One endpoint's pruning policy is not a reason to stop verifying the protocol.
+ */
+async function runSection(label: string, body: () => Promise<void>): Promise<void> {
+  try {
+    await body();
+  } catch (error) {
+    skipped(label, error instanceof Error ? error.message : String(error));
+  }
+}
+
+/**
+ * Run one check that needs something the endpoint may not offer, such as archive
+ * state. Same reasoning as `runSection`, one level finer.
+ */
+async function optional(label: string, body: () => Promise<void>): Promise<void> {
+  try {
+    await body();
+  } catch (error) {
+    skipped(label, error instanceof Error ? error.message : String(error));
+  }
 }
 
 function expectEqual(label: string, actual: unknown, expected: unknown): void {
@@ -234,21 +281,27 @@ async function verifyAddresses(client: PublicClient, factory: Address): Promise<
   }
   pass("factory has code", `${(code.length - 2) / 2} bytes`);
 
-  const deployBlockCode = await client.getCode({
-    address: factory,
-    blockNumber: AUDIT_IMMUTABLE.factoryDeployBlock,
+  // Needs archive state at the deploy block, which a pruning endpoint simply does not
+  // have. It answered `0x` once; dRPC now rejects the request outright ("Unknown
+  // state. First available state is 1"), and that HTTP 400 used to abort the whole
+  // run. One check that an endpoint cannot serve must not cost the other thirty.
+  await optional("factory existed at documented deploy block", async () => {
+    const deployBlockCode = await client.getCode({
+      address: factory,
+      blockNumber: AUDIT_IMMUTABLE.factoryDeployBlock,
+    });
+    if (deployBlockCode && deployBlockCode !== "0x") {
+      pass(
+        "factory existed at documented deploy block",
+        `${AUDIT_IMMUTABLE.factoryDeployBlock}`,
+      );
+    } else {
+      skipped(
+        "factory existed at documented deploy block",
+        "endpoint does not serve archive state that far back",
+      );
+    }
   });
-  if (deployBlockCode && deployBlockCode !== "0x") {
-    pass(
-      "factory existed at documented deploy block",
-      `${AUDIT_IMMUTABLE.factoryDeployBlock}`,
-    );
-  } else {
-    info(
-      "deploy block unverifiable",
-      "endpoint may not serve archive state that far back",
-    );
-  }
 
   const addresses = await resolvePonsAddresses(client, factory);
   expectEqual("memeHook", addresses.memeHook, AUDIT_IMMUTABLE.memeHook);
@@ -549,7 +602,9 @@ async function main(): Promise<void> {
   if (!endpoint) throw new Error("No RPC endpoint configured (set RPC_ENDPOINTS)");
 
   console.log("STUNKS.FUN — Pons V2 verification");
-  console.log(`RPC:     ${endpoint}`);
+  console.log(
+    `RPC:     ${endpoint}${endpoints.length > 1 ? ` (+${endpoints.length - 1} fallback)` : ""}`,
+  );
   console.log(
     `Chain:   ${ROBINHOOD_CHAIN_ID} (${Object.keys(CONTRACTS).length} configured)`,
   );
@@ -567,19 +622,29 @@ async function main(): Promise<void> {
     pollingInterval: 100,
   }) as PublicClient;
 
-  await verifyChain(client);
-  await verifyAddresses(client, factory);
-  await verifyParameters(client, factory);
-  await verifyLaunchConfigs(client, factory);
+  await runSection("1. Chain", () => verifyChain(client));
+  await runSection("2. Address graph", () => verifyAddresses(client, factory));
+  await runSection("3. Factory parameters", () => verifyParameters(client, factory));
+  await runSection("4. Launch configs", () => verifyLaunchConfigs(client, factory));
 
-  const addresses = await resolvePonsAddresses(client, factory);
-  await verifyFeePolicy(client, addresses.memeHook);
-  await verifySelectors(client, addresses.launchAndBuyRouter);
-  await verifyQuoteMath(client, factory);
-  await verifyPairTokens(client, factory);
+  // Sections 5-6 need the resolved graph. If that read is the thing that is failing,
+  // say so once rather than reporting the same failure twice.
+  await runSection("5-6. Hook and router", async () => {
+    const addresses = await resolvePonsAddresses(client, factory);
+    await runSection("5. Fee policy", () => verifyFeePolicy(client, addresses.memeHook));
+    await runSection("6. Bytecode selectors", () =>
+      verifySelectors(client, addresses.launchAndBuyRouter),
+    );
+  });
+
+  await runSection("7. Quote math", () => verifyQuoteMath(client, factory));
+  await runSection("8. Approved quote assets", () => verifyPairTokens(client, factory));
 
   section("Result");
-  console.log(`  ${checks} checks, ${failures} failed`);
+  console.log(
+    `  ${checks} checks, ${failures} failed` +
+      (unverifiable > 0 ? `, ${unverifiable} unverifiable` : ""),
+  );
   if (failures > 0) {
     console.log(
       `\n  A failure means a fact in docs/PONS_V2_INTEGRATION.md is no longer true.\n` +
@@ -587,6 +652,15 @@ async function main(): Promise<void> {
         `  depends on it.`,
     );
     process.exitCode = 1;
+  } else if (unverifiable > 0) {
+    // Not a pass. Nothing contradicted the docs, but not everything was asked.
+    console.log(
+      `\n  Nothing contradicted the documented facts, but ${unverifiable} check(s) could\n` +
+        `  not be run against this endpoint. Re-run against one that serves them before\n` +
+        `  treating this as a clean verification:\n` +
+        `\n    RPC_ENDPOINTS=<archive-capable endpoint> pnpm verify:pons\n`,
+    );
+    process.exitCode = 2;
   } else {
     console.log("\n  Every documented fact still holds.");
   }

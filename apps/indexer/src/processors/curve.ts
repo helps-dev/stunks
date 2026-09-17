@@ -257,8 +257,10 @@ export async function refreshTokenStatsBatch(
   // that kept the curve stream below the chain's 10 blocks/second. `updateStatsMany`
   // preserves the same derived-field boundary as TokenRepository.updateStats, but sends
   // all values in one PostgreSQL statement.
-  const statsRows: { tokenId: string; stats: Parameters<typeof deps.repos.tokens.updateStats>[1] }[] =
-    [];
+  const statsRows: {
+    tokenId: string;
+    stats: Parameters<typeof deps.repos.tokens.updateStats>[1];
+  }[] = [];
   for (const tokenId of tokenIds) {
     const token = tokens.get(tokenId);
     if (!token) continue;
@@ -297,6 +299,11 @@ export async function refreshTokenStatsBatch(
         marketCap: marketCapFromPrice(price, token.totalSupply),
         volume24h: dayAggregate.volume,
         volumeTotal: aggregate.volume,
+        // Carried through unchanged, NOT computed. Deriving a holder count needs the
+        // ERC-20 Transfer stream, which is not indexed yet: trades alone cannot see a
+        // wallet-to-wallet move, so counting them would undercount by an unknown
+        // amount. The column therefore stays at its initial 0 and the UI says "not
+        // indexed yet" rather than printing that 0 as if it were a measurement.
         holderCount: token.holderCount,
         tradeCount: aggregate.tradeCount,
         buyCount: aggregate.buyCount,
@@ -354,6 +361,7 @@ export async function refreshTokenStats(
     marketCap: marketCapFromPrice(price, totalSupply),
     volume24h: dayAggregate.volume,
     volumeTotal: aggregate.volume,
+    // Carried through unchanged, not computed. See the note in the batch path above.
     holderCount: token.holderCount,
     tradeCount: aggregate.tradeCount,
     buyCount: aggregate.buyCount,

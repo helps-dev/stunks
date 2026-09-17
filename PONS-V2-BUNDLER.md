@@ -6,13 +6,13 @@ bagaimana MegaBot memanfaatkannya.
 
 Semua angka di dokumen ini **dibaca langsung dari kontrak live**, bukan dari asumsi.
 
-| | |
-|---|---|
-| Jaringan | Robinhood Chain |
-| Chain ID | `4663` |
-| RPC | `https://rpc.ordofi.network` |
-| Waktu blok | **~100 ms** |
-| Terakhir diverifikasi | 15 September 2026 |
+|                       |                              |
+| --------------------- | ---------------------------- |
+| Jaringan              | Robinhood Chain              |
+| Chain ID              | `4663`                       |
+| RPC                   | `https://rpc.ordofi.network` |
+| Waktu blok            | **~100 ms**                  |
+| Terakhir diverifikasi | 15 September 2026            |
 
 Waktu blok ~100 ms adalah angka yang menentukan hampir semua keputusan teknis di
 dokumen ini. Ingat itu saat membaca bagian bundler.
@@ -71,19 +71,19 @@ wallet Anda tiba sebelum window pajak habis.**
 
 ## 2. Kontrak yang terlibat
 
-| Peran | Alamat | Nama terverifikasi |
-|---|---|---|
-| Factory | `0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e` | `PonsV2LaunchFactory` |
-| Router launch | `0xe33E9E479dF8802cb0866d5d05258bEc4cF62948` | `PonsV2LaunchAndBuy` |
-| Hook pool V4 | `0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044` | `V2MemeHook` |
+| Peran         | Alamat                                       | Nama terverifikasi    |
+| ------------- | -------------------------------------------- | --------------------- |
+| Factory       | `0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e` | `PonsV2LaunchFactory` |
+| Router launch | `0xe33E9E479dF8802cb0866d5d05258bEc4cF62948` | `PonsV2LaunchAndBuy`  |
+| Hook pool V4  | `0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044` | `V2MemeHook`          |
 
 Status factory saat diverifikasi:
 
-| Field | Nilai |
-|---|---|
-| `launchFee` | **0,0005 ETH** |
-| `maxCreatorTaxBps` | 1000 (10%) |
-| `launchEnabled` | `true` |
+| Field               | Nilai                              |
+| ------------------- | ---------------------------------- |
+| `launchFee`         | **0,0005 ETH**                     |
+| `maxCreatorTaxBps`  | 1000 (10%)                         |
+| `launchEnabled`     | `true`                             |
 | `launchConfigCount` | **1** (hanya config `#0` yang ada) |
 
 Setiap token yang di-launch mendapat **kontrak kurva sendiri** (`PonsV2BondingCurve`) —
@@ -105,14 +105,14 @@ tokensOut = (amountIn × reserveOut) / (reserveIn + amountIn)
 
 Config aktif (`launchConfigId = 0`):
 
-| Parameter | Nilai |
-|---|---|
-| `supply` | 1.000.000.000 token |
-| `phantomQuote` | **1,68 ETH** (reserve semu) |
+| Parameter             | Nilai                       |
+| --------------------- | --------------------------- |
+| `supply`              | 1.000.000.000 token         |
+| `phantomQuote`        | **1,68 ETH** (reserve semu) |
 | `graduationThreshold` | **4,2 ETH** (reserve nyata) |
-| `curveFeeBps` | 100 (1%) |
-| `poolFee` | 0 |
-| `tickSpacing` | 200 |
+| `curveFeeBps`         | 100 (1%)                    |
+| `poolFee`             | 0                           |
+| `tickSpacing`         | 200                         |
 
 ### 3.1 Kenapa ada `phantomQuote`
 
@@ -193,19 +193,19 @@ snipeTaxBps = snipeTaxStartBps >> floor(elapsed × 14 / snipeTaxSeconds)
 
 Nilai live di factory:
 
-| Parameter | Nilai |
-|---|---|
+| Parameter          | Nilai          |
+| ------------------ | -------------- |
 | `snipeTaxStartBps` | **9900** (99%) |
-| `snipeTaxSeconds` | **3** detik |
+| `snipeTaxSeconds`  | **3** detik    |
 
 Tabel peluruhan sebenarnya:
 
-| Waktu setelah launch | Pajak | Efek nyata |
-|---|---|---|
-| **t+0s** | **9900 bps = 99,00%** | belanja 1 ETH → hanya 0,01 ETH jadi token |
-| t+1s | 618 bps = 6,18% | |
-| t+2s | 19 bps = **0,19%** | praktis gratis |
-| t+3s | 0 bps = 0,00% | window selesai |
+| Waktu setelah launch | Pajak                 | Efek nyata                                |
+| -------------------- | --------------------- | ----------------------------------------- |
+| **t+0s**             | **9900 bps = 99,00%** | belanja 1 ETH → hanya 0,01 ETH jadi token |
+| t+1s                 | 618 bps = 6,18%       |                                           |
+| t+2s                 | 19 bps = **0,19%**    | praktis gratis                            |
+| t+3s                 | 0 bps = 0,00%         | window selesai                            |
 
 **Kenapa digeser 14 kali?** Karena 2¹⁴ = 16384 cukup besar untuk menghabiskan 9900 sampai
 nol. Jadi pajaknya benar-benar mencapai 0 di dalam window, bukan terputus mendadak saat
@@ -231,10 +231,10 @@ sementara alamat di luar daftar kena **9900 bps** di detik yang sama.
 
 ### 5.1 Batasan keras
 
-| Batas | Nilai | Alasan |
-|---|---|---|
-| Ceiling kontrak | **32** alamat | di atasnya `_exemptFromSnipeTax` revert `ExemptionListTooLong` |
-| Yang boleh Anda kirim | **31** alamat | router menambahkan `recipient` (dev wallet) ke daftar |
+| Batas                 | Nilai         | Alasan                                                         |
+| --------------------- | ------------- | -------------------------------------------------------------- |
+| Ceiling kontrak       | **32** alamat | di atasnya `_exemptFromSnipeTax` revert `ExemptionListTooLong` |
+| Yang boleh Anda kirim | **31** alamat | router menambahkan `recipient` (dev wallet) ke daftar          |
 
 ### 5.2 Hanya bisa didaftarkan saat launch
 
@@ -294,11 +294,11 @@ if (msg.value != expectedValue) revert NativeValueMismatch(expectedValue, msg.va
 
 Perhatikan `!=`, bukan `<`. Ini sudah diuji langsung ke router live:
 
-| `msg.value` dikirim | Hasil |
-|---|---|
+| `msg.value` dikirim            | Hasil                                               |
+| ------------------------------ | --------------------------------------------------- |
 | `launchFee` saja (pair native) | lolos cek value, gagal lebih jauh di validasi token |
-| `launchFee + quoteIn` | benar |
-| `launchFee + quoteIn − 1 wei` | revert `NativeValueMismatch` (`0xbc760cfe`) |
+| `launchFee + quoteIn`          | benar                                               |
+| `launchFee + quoteIn − 1 wei`  | revert `NativeValueMismatch` (`0xbc760cfe`)         |
 
 Kelebihan **maupun** kekurangan 1 wei sama-sama ditolak. Tidak ada toleransi.
 
@@ -316,19 +316,19 @@ Anda setujui.
 Selain ETH native, PONS menyetujui 11 quote asset lain. Semua nilai di bawah **dibaca
 langsung** dari `pairTokenEconomics()` di factory:
 
-| Pair | Alamat | Dec | `phantomQuote` | `graduationThreshold` |
-|---|---|---|---|---|
-| **USDG** | `0x5fc5360d0400a0fd4f2af552add042d716f1d168` | **6** | 3.236 | 8.090 |
-| NVDA | `0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec` | 18 | 16,64 | 41,6 |
-| TSLA | `0x322f0929c4625ed5bad873c95208d54e1c003b2d` | 18 | 10,4 | 26 |
-| SPCX | `0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea` | 18 | 28,88 | 72,2 |
-| AAPL | `0xaf3d76f1834a1d425780943c99ea8a608f8a93f9` | 18 | 9,68 | 24,2 |
-| MSFT | `0xe93237c50d904957cf27e7b1133b510c669c2e74` | 18 | 6,431455767077268559 | 16,078639417693171399 |
-| SNAP | `0xf6589f11bc40b669e584073f428b05562f568733` | 18 | 719,274418604651247932 | 1798,186046511628119831 |
-| SPY | `0x117cc2133c37b721f49de2a7a74833232b3b4c0c` | 18 | 4,36 | 10,9 |
-| QQQ | `0xd5f3879160bc7c32ebb4dc785f8a4f505888de68` | 18 | 4,458589950261094614 | 11,146474875652736535 |
-| BB | `0x48e39e56acdba37b09020c0b734a613c9a2f100a` | 18 | 503,824570024570146772 | 1259,561425061425366930 |
-| F | `0x25c288e6d899b9bc30160965ad9644c67e73be0c` | 18 | 284,566776859504164031 | 711,416942148760410079 |
+| Pair     | Alamat                                       | Dec   | `phantomQuote`         | `graduationThreshold`   |
+| -------- | -------------------------------------------- | ----- | ---------------------- | ----------------------- |
+| **USDG** | `0x5fc5360d0400a0fd4f2af552add042d716f1d168` | **6** | 3.236                  | 8.090                   |
+| NVDA     | `0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec` | 18    | 16,64                  | 41,6                    |
+| TSLA     | `0x322f0929c4625ed5bad873c95208d54e1c003b2d` | 18    | 10,4                   | 26                      |
+| SPCX     | `0x4a0e65a3eccec6dbe60ae065f2e7bb85fae35eea` | 18    | 28,88                  | 72,2                    |
+| AAPL     | `0xaf3d76f1834a1d425780943c99ea8a608f8a93f9` | 18    | 9,68                   | 24,2                    |
+| MSFT     | `0xe93237c50d904957cf27e7b1133b510c669c2e74` | 18    | 6,431455767077268559   | 16,078639417693171399   |
+| SNAP     | `0xf6589f11bc40b669e584073f428b05562f568733` | 18    | 719,274418604651247932 | 1798,186046511628119831 |
+| SPY      | `0x117cc2133c37b721f49de2a7a74833232b3b4c0c` | 18    | 4,36                   | 10,9                    |
+| QQQ      | `0xd5f3879160bc7c32ebb4dc785f8a4f505888de68` | 18    | 4,458589950261094614   | 11,146474875652736535   |
+| BB       | `0x48e39e56acdba37b09020c0b734a613c9a2f100a` | 18    | 503,824570024570146772 | 1259,561425061425366930 |
+| F        | `0x25c288e6d899b9bc30160965ad9644c67e73be0c` | 18    | 284,566776859504164031 | 711,416942148760410079  |
 
 Dua hal yang wajib diperhatikan:
 
@@ -363,15 +363,15 @@ Tiga implikasi:
 
 Dari 299 transaksi `launchAndBuy` yang berhasil didekode:
 
-| Quote asset | Porsi |
-|---|---|
-| ETH native | **86,6%** |
-| USDG | 5,4% |
-| NVDA | 3,3% |
-| TSLA | 1,3% |
-| SPCX | 1,0% |
-| AAPL | 0,7% |
-| lainnya | 0,3% |
+| Quote asset      | Porsi     |
+| ---------------- | --------- |
+| ETH native       | **86,6%** |
+| USDG             | 5,4%      |
+| NVDA             | 3,3%      |
+| TSLA             | 1,3%      |
+| SPCX             | 1,0%      |
+| AAPL             | 0,7%      |
+| lainnya          | 0,3%      |
 | **total ERC-20** | **13,4%** |
 
 > Catatan koreksi: angka "28% pakai stock pair" yang sempat saya sebut sebelumnya
@@ -412,12 +412,12 @@ Kurva dibuat dengan **CREATE2 dari salt yang kita pilih sendiri**. Artinya simul
 Itu membuka semuanya. Ternyata **tidak satu pun** item di daftar 8.1 benar-benar
 membutuhkan launch sudah terjadi:
 
-| Yang dibutuhkan | Bisa didapat sebelum launch dari |
-|---|---|
-| alamat kurva | simulasi CREATE2 |
-| reserve awal | config factory, digeser oleh dev buy kita sendiri yang ukurannya kita pilih |
-| saldo, nonce, fee cap | pembacaan RPC biasa |
-| private key | keystore lokal |
+| Yang dibutuhkan       | Bisa didapat sebelum launch dari                                            |
+| --------------------- | --------------------------------------------------------------------------- |
+| alamat kurva          | simulasi CREATE2                                                            |
+| reserve awal          | config factory, digeser oleh dev buy kita sendiri yang ukurannya kita pilih |
+| saldo, nonce, fee cap | pembacaan RPC biasa                                                         |
+| private key           | keystore lokal                                                              |
 
 Jadi seluruhnya dipindah ke **depan** launch. Setiap wallet keluar dari tahap persiapan
 sebagai **transaksi yang sudah ditandatangani penuh**. Yang tersisa di detik launch hanya
@@ -430,11 +430,11 @@ berlomba dengan siapa pun — launch adalah yang dilombakan.**
 
 ## 9. Tiga mode bundler
 
-| Mode | Cara kerja | Kelebihan | Kekurangan |
-|---|---|---|---|
-| **Atomic** | 1 transaksi untuk semua penerima via `PonsBundleExecutor`, dipin ke reserve yang kita hitung | Satu-satunya yang benar-benar **anti front-run**: revert kalau ada yang beli lebih dulu | Tidak bisa terisi sebagian. Pola 1 pembayar + N penerima dalam 1 TX = klaster paling mudah dibaca. **Belum di-deploy** |
-| **Pre-signed** | N transaksi, semua ditandatangani sebelum launch dikirim | Tercepat yang tersedia sekarang | Tiap wallet TX sendiri → bisa terisi sebagian, tidak bersyarat terhadap sniper |
-| **Berurutan** | Kutip & kirim satu per satu setelah launch, dengan jeda teracak | Paling terlihat organik | Paling lambat — sniper bisa mendahului |
+| Mode           | Cara kerja                                                                                   | Kelebihan                                                                               | Kekurangan                                                                                                             |
+| -------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Atomic**     | 1 transaksi untuk semua penerima via `PonsBundleExecutor`, dipin ke reserve yang kita hitung | Satu-satunya yang benar-benar **anti front-run**: revert kalau ada yang beli lebih dulu | Tidak bisa terisi sebagian. Pola 1 pembayar + N penerima dalam 1 TX = klaster paling mudah dibaca. **Belum di-deploy** |
+| **Pre-signed** | N transaksi, semua ditandatangani sebelum launch dikirim                                     | Tercepat yang tersedia sekarang                                                         | Tiap wallet TX sendiri → bisa terisi sebagian, tidak bersyarat terhadap sniper                                         |
+| **Berurutan**  | Kutip & kirim satu per satu setelah launch, dengan jeda teracak                              | Paling terlihat organik                                                                 | Paling lambat — sniper bisa mendahului                                                                                 |
 
 **Status `PonsBundleExecutor`:** sudah diverifikasi 14/14 lewat `eth_call` dengan state
 override, tapi **belum di-deploy** dan alamatnya tidak di-hardcode. Alasannya: kontrak ini
@@ -476,7 +476,7 @@ angka itu sendirian bisa menahan bundle lebih lama daripada seluruh window 3 det
 diperlombakan.
 
 ```ts
-createPublicClient({ transport: http(rpc), pollingInterval: 100 })
+createPublicClient({ transport: http(rpc), pollingInterval: 100 });
 ```
 
 Bug yang sama pernah membuat panic sell terasa sangat lambat — lihat catatan di 10.5.
@@ -518,11 +518,11 @@ terasa saat Anda ingin keluar.
 
 Bukan satu bug, tapi tiga sekaligus:
 
-| Bug | Akibat |
-|---|---|
-| Loop `for` berurutan | `PANIC_CONCURRENCY` dibuang begitu saja |
-| `waitForTransactionReceipt` tanpa `pollingInterval` | menunggu 4000 ms di rantai 100 ms |
-| Approve sebesar saldo tepat | setiap sell harus approve ulang → 2× transaksi |
+| Bug                                                 | Akibat                                         |
+| --------------------------------------------------- | ---------------------------------------------- |
+| Loop `for` berurutan                                | `PANIC_CONCURRENCY` dibuang begitu saja        |
+| `waitForTransactionReceipt` tanpa `pollingInterval` | menunggu 4000 ms di rantai 100 ms              |
+| Approve sebesar saldo tepat                         | setiap sell harus approve ulang → 2× transaksi |
 
 Perbaikannya: fan-out pada `PANIC_CONCURRENCY`, `pollingInterval: 100`, dan approve
 `2^256 − 1` sekali saja.
@@ -539,22 +539,22 @@ Diukur dari launch sungguhan, bukan simulasi.
 
 **Launch yang diukur**
 
-| | |
-|---|---|
-| TX | `0xe7524933547b86905e7f0ee728a6365b07f00e6646150320ae08cc3e7821b7c9` |
-| Blok | 62225040 |
-| Token | `0xba7acf0fac4682b722397c1e562a9c4a1f47f609` |
-| Kurva | `0xB170595e30aaD7D7Cf61B5Af978a536A12DF34b4` |
-| Mode | pre-signed |
+|       |                                                                      |
+| ----- | -------------------------------------------------------------------- |
+| TX    | `0xe7524933547b86905e7f0ee728a6365b07f00e6646150320ae08cc3e7821b7c9` |
+| Blok  | 62225040                                                             |
+| Token | `0xba7acf0fac4682b722397c1e562a9c4a1f47f609`                         |
+| Kurva | `0xB170595e30aaD7D7Cf61B5Af978a536A12DF34b4`                         |
+| Mode  | pre-signed                                                           |
 
 **Perbandingan**
 
-| Metrik | Sebelum (berurutan) | Sesudah (pre-signed) |
-|---|---|---|
-| Wallet bundle mendarat | blok **+18**, 2 detik | blok **+5**, **0 detik** |
-| Wallet berhasil | 1 | **4 / 4** |
-| Sniper mendahului | — | **0** |
-| Pangsa token 10 detik pertama | — | **100%** |
+| Metrik                        | Sebelum (berurutan)   | Sesudah (pre-signed)     |
+| ----------------------------- | --------------------- | ------------------------ |
+| Wallet bundle mendarat        | blok **+18**, 2 detik | blok **+5**, **0 detik** |
+| Wallet berhasil               | 1                     | **4 / 4**                |
+| Sniper mendahului             | —                     | **0**                    |
+| Pangsa token 10 detik pertama | —                     | **100%**                 |
 
 Baseline "sebelum" diukur dari launch GLOOP
 `0x7e1d95decbff656c6c7259a900859c36b03db6c76dbde3f67e2e755237d74176` (blok 59595189).
@@ -615,11 +615,11 @@ Temuan terpisah, dicatat di sini karena sering dikaitkan (salah) dengan bundler.
 
 Tiga launch dari deployer yang sama (`0x78AB8050…d5D6BD`):
 
-| Token | Label phishing | Logo | Deskripsi | Twitter | Metadata | Exemptions |
-|---|---|---|---|---|---|---|
-| MADUSA | **100%** | `gateway.pinata.cloud` | kosong | `x.com/madusa` | 2/7 | 10 |
-| QUMA #1 | 0% | `ipfs://` | terisi | `x.com/Qumahood` | 3/7 | 0 |
-| QUMA #2 | 0% | `gateway.pinata.cloud` | kosong | `x.com/qumahood` | 2/7 | 3 |
+| Token   | Label phishing | Logo                   | Deskripsi | Twitter          | Metadata | Exemptions |
+| ------- | -------------- | ---------------------- | --------- | ---------------- | -------- | ---------- |
+| MADUSA  | **100%**       | `gateway.pinata.cloud` | kosong    | `x.com/madusa`   | 2/7      | 10         |
+| QUMA #1 | 0%             | `ipfs://`              | terisi    | `x.com/Qumahood` | 3/7      | 0          |
+| QUMA #2 | 0%             | `gateway.pinata.cloud` | kosong    | `x.com/qumahood` | 2/7      | 3          |
 
 **Kesimpulan: penyebabnya kemungkinan handle Twitter, BUKAN MegaBot.**
 
@@ -728,16 +728,16 @@ GET /uniswap-v4/pons-v2/quote-assets    # daftar pair yang disetujui + desimal +
 
 ### 14.4 Gotcha yang perlu diketahui
 
-| Masalah | Penanganan |
-|---|---|
-| robinscan `/api/addresses/{a}/txs` rate-limit | butuh backoff + jeda ~1,2 s per halaman |
-| robinscan tidak mengembalikan calldata | pakai `eth_getTransactionByHash` untuk input |
-| Blockscout API 403 | pakai robinscan `/api/contracts/{addr}` untuk source terverifikasi |
-| Retensi log RPC publik pendek | **ukur launch segera setelah terjadi**, jangan ditunda |
-| `mapWithConcurrency` | mengembalikan `PromiseSettledResult[]`, bukan nilai langsung |
+| Masalah                                       | Penanganan                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------ |
+| robinscan `/api/addresses/{a}/txs` rate-limit | butuh backoff + jeda ~1,2 s per halaman                            |
+| robinscan tidak mengembalikan calldata        | pakai `eth_getTransactionByHash` untuk input                       |
+| Blockscout API 403                            | pakai robinscan `/api/contracts/{addr}` untuk source terverifikasi |
+| Retensi log RPC publik pendek                 | **ukur launch segera setelah terjadi**, jangan ditunda             |
+| `mapWithConcurrency`                          | mengembalikan `PromiseSettledResult[]`, bukan nilai langsung       |
 
 ---
 
-*Dokumen ini mencerminkan state on-chain per 15 September 2026. Parameter factory bisa
+_Dokumen ini mencerminkan state on-chain per 15 September 2026. Parameter factory bisa
 diubah owner — verifikasi ulang dengan script di 14.2 sebelum mengandalkan angka di sini
-untuk launch bernilai besar.*
+untuk launch bernilai besar._

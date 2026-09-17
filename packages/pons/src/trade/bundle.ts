@@ -100,7 +100,11 @@ export function planBundle(args: PlanBundleArgs): PlanBundleResult {
   const { recipients, slippageBps, exemptAddresses } = args;
 
   if (recipients.length === 0) {
-    return { ok: false, code: "NO_RECIPIENTS", message: "Add at least one wallet to bundle." };
+    return {
+      ok: false,
+      code: "NO_RECIPIENTS",
+      message: "Add at least one wallet to bundle.",
+    };
   }
   if (recipients.length > MAX_BUNDLE_RECIPIENTS) {
     return {

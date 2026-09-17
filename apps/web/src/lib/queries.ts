@@ -1,6 +1,8 @@
 import { createRepositories, getPrisma } from "@stunks/database";
 import type { ExploreSort, TokenSummary } from "@stunks/database";
-import { BLOCK_TIME_SECONDS, ROBINHOOD_CHAIN_ID } from "@stunks/config";
+import { ROBINHOOD_CHAIN_ID } from "@stunks/config";
+import { summariseStaleness } from "./staleness.js";
+import type { IndexerStaleness, StreamStaleness } from "./staleness.js";
 
 /**
  * Server-side data access for the web app.
@@ -17,6 +19,9 @@ import { BLOCK_TIME_SECONDS, ROBINHOOD_CHAIN_ID } from "@stunks/config";
  */
 
 const repos = createRepositories(getPrisma());
+
+/** Re-exported so pages keep importing their view models from one module. */
+export type { IndexerStaleness, StreamStaleness };
 
 export interface SerialisedToken {
   readonly address: string;
@@ -88,47 +93,13 @@ export interface ExploreResult {
  * than the chain produces, so a page can legitimately be showing state from a while
  * ago — and letting a user assume otherwise on a trading interface would be
  * indefensible.
+ *
+ * The selection rule lives in `./staleness` so it can be tested without a database.
+ * It reports the SLOWEST required stream; see that module for why.
  */
-export interface IndexerStaleness {
-  readonly indexedBlock: string | null;
-  readonly chainHead: string | null;
-  readonly lagBlocks: string | null;
-  readonly lagSeconds: number | null;
-  readonly lastSuccessAt: string | null;
-  readonly isStale: boolean;
-}
-
 export async function readStaleness(chainHead: bigint | null): Promise<IndexerStaleness> {
-  const streams = await repos.explore.indexerLag(ROBINHOOD_CHAIN_ID);
-  const factory = streams.find((stream) => stream.stream === "factory");
-
-  if (!factory) {
-    return {
-      indexedBlock: null,
-      chainHead: chainHead?.toString() ?? null,
-      lagBlocks: null,
-      lagSeconds: null,
-      lastSuccessAt: null,
-      isStale: true,
-    };
-  }
-
-  const lag = chainHead === null ? null : chainHead - factory.lastProcessedBlock;
-  const lagSeconds =
-    lag === null
-      ? null
-      : // eslint-disable-next-line no-restricted-syntax -- a block count is not money; this is a human-readable estimate
-        Math.round(Number(lag) * BLOCK_TIME_SECONDS);
-
-  return {
-    indexedBlock: factory.lastProcessedBlock.toString(),
-    chainHead: chainHead?.toString() ?? null,
-    lagBlocks: lag?.toString() ?? null,
-    lagSeconds,
-    lastSuccessAt: factory.lastSuccessAt?.toISOString() ?? null,
-    // A minute of lag is ~600 blocks here, which is normal. Ten minutes is not.
-    isStale: lagSeconds === null || lagSeconds > 600,
-  };
+  const states = await repos.explore.indexerLag(ROBINHOOD_CHAIN_ID);
+  return summariseStaleness(states, chainHead);
 }
 
 export async function exploreTokens(args: {

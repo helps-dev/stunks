@@ -102,7 +102,14 @@ export default async function ExplorePage({ searchParams }: PageProps) {
         />
       </div>
 
-      {/* Honest about how current this is, including when it is not current. */}
+      {/*
+        Honest about how current this is, including when it is not current.
+
+        The headline figure is the SLOWEST stream, because that is what actually bounds
+        the numbers below: prices and volume come from the curve stream, and it is the
+        one structurally capable of falling a long way behind. Each stream is then named
+        individually, so "behind" points at where the backlog really is.
+      */}
       <div className={staleness.isStale ? "indexer-status stale" : "indexer-status"}>
         <span className="indexer-status-icon">{staleness.isStale ? "!" : "✓"}</span>
         <div>
@@ -111,11 +118,28 @@ export default async function ExplorePage({ searchParams }: PageProps) {
             <p>
               Indexed to block <span className="mono">{staleness.indexedBlock}</span> of{" "}
               <span className="mono">{staleness.chainHead}</span> —{" "}
-              {formatBlockLag(BigInt(staleness.lagBlocks), BLOCK_TIME_SECONDS)}.
-              {staleness.isStale && " Figures below may be behind the chain."}
+              {formatBlockLag(BigInt(staleness.lagBlocks), BLOCK_TIME_SECONDS)}
+              {staleness.stream !== null && `, bounded by the ${staleness.stream} stream`}
+              .{staleness.isStale && " Figures below may be behind the chain."}
             </p>
           ) : (
-            <p>Could not determine current chain lag. Treat metrics as indicative only.</p>
+            <p>
+              Could not determine current chain lag. Treat metrics as indicative only.
+            </p>
+          )}
+          {staleness.streams.length > 0 && (
+            <ul className="indexer-streams">
+              {staleness.streams.map((stream) => (
+                <li key={stream.stream}>
+                  <span className="indexer-stream-name">{stream.stream}</span>{" "}
+                  <span className="mono">{stream.indexedBlock}</span>
+                  {stream.lagBlocks !== null && (
+                    <> — {formatBlockLag(BigInt(stream.lagBlocks), BLOCK_TIME_SECONDS)}</>
+                  )}
+                  {stream.isPaused && " — paused"}
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       </div>

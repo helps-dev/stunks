@@ -71,11 +71,29 @@ export async function readLaunchConfigs(
     functionName: "launchConfigCount",
   })) as bigint;
 
-  const configs: LaunchConfig[] = [];
-  for (let id = 0n; id < count; id++) {
-    configs.push(await readLaunchConfig(client, factory, id));
+  // Concurrent, not sequential. These reads are independent, and a client with
+  // Multicall3 enabled collapses them into a single round trip — where the loop paid
+  // one full round trip per config. On a page that re-reads this on every request, at
+  // ~124 ms per trip, that was the difference between one call and a dozen.
+  const ids = Array.from({ length: countAsLength(count) }, (_, index) => BigInt(index));
+  return Promise.all(ids.map((id) => readLaunchConfig(client, factory, id)));
+}
+
+/**
+ * `launchConfigCount` is a uint256 but is a small enumeration in practice.
+ *
+ * Refuses rather than truncates if that stops being true, because silently reading the
+ * first 2^32 configs would be a far stranger failure than an explicit one.
+ */
+function countAsLength(count: bigint): number {
+  if (count > 1_000n) {
+    throw new Error(
+      `launchConfigCount returned ${count}, which is not a plausible enumeration. ` +
+        `Reading them all would be a mistake; verify the factory address first.`,
+    );
   }
-  return configs;
+  // eslint-disable-next-line no-restricted-syntax -- a bounded enumeration count, not an amount
+  return Number(count);
 }
 
 export async function readLaunchConfig(

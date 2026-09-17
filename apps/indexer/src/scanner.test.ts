@@ -21,8 +21,7 @@ import { RangeTooWideError, type LogSource } from "./sources/types.js";
  * degraded even after the next retry succeeded.
  */
 
-const HASH =
-  "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Hex;
+const HASH = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" as Hex;
 
 interface Fixture {
   readonly scanner: Scanner;
@@ -39,16 +38,28 @@ interface Fixture {
     resolveFailedBlock: ReturnType<typeof vi.fn>;
     resolveFailedBlocksThrough: ReturnType<typeof vi.fn>;
     advance: ReturnType<typeof vi.fn>;
+    rollbackTo: ReturnType<typeof vi.fn>;
+    rollbackIfAhead: ReturnType<typeof vi.fn>;
   };
+  readonly deleteAbove: ReturnType<typeof vi.fn>;
 }
 
-function fixture(options: { topics0?: readonly Hex[] } = {}): Fixture {
+interface FixtureOptions {
+  readonly topics0?: readonly Hex[];
+  readonly stream?: string;
+  /** Set to replay a checkpoint whose recorded hash no longer matches the chain. */
+  readonly recordedHash?: Hex | null;
+  readonly cascadeStreams?: readonly string[];
+}
+
+function fixture(options: FixtureOptions = {}): Fixture {
+  const stream = options.stream ?? "factory";
   const checkpoints = {
     getOrCreate: vi.fn().mockResolvedValue({
       chainId: 4663,
-      stream: "factory",
+      stream,
       lastProcessedBlock: 100n,
-      lastProcessedBlockHash: null,
+      lastProcessedBlockHash: options.recordedHash ?? null,
       confirmationDepth: 12,
       logWindowSize: 100,
       isPaused: false,
@@ -60,6 +71,8 @@ function fixture(options: { topics0?: readonly Hex[] } = {}): Fixture {
     resolveFailedBlock: vi.fn().mockResolvedValue(undefined),
     resolveFailedBlocksThrough: vi.fn().mockResolvedValue(0),
     advance: vi.fn().mockResolvedValue(undefined),
+    rollbackTo: vi.fn().mockResolvedValue(undefined),
+    rollbackIfAhead: vi.fn().mockResolvedValue(null),
   };
 
   const source = {
@@ -72,16 +85,18 @@ function fixture(options: { topics0?: readonly Hex[] } = {}): Fixture {
 
   const repos = {
     checkpoints,
-    // Reorg cannot run in these tests because the checkpoint has no saved hash.
-    // The remaining repositories are unused in a normal tick.
+    // A stream deletes only what it owns, through `deleteAbove`. The scanner never
+    // reaches for a repository directly during a rollback, which is the point.
     tokens: {},
     trades: {},
   } as unknown as Repositories;
 
+  const deleteAbove = vi.fn().mockResolvedValue({ tokens: 7 });
+
   return {
     scanner: new Scanner({
-      name: "factory",
-      stream: "factory",
+      name: stream,
+      stream,
       chainId: 4663,
       client: {} as never,
       source: source as unknown as LogSource,
@@ -90,12 +105,17 @@ function fixture(options: { topics0?: readonly Hex[] } = {}): Fixture {
       confirmationDepth: 2,
       addresses: async () => [],
       ...(options.topics0 !== undefined ? { topics0: options.topics0 } : {}),
+      ...(options.cascadeStreams !== undefined
+        ? { cascadeStreams: options.cascadeStreams }
+        : {}),
+      deleteAbove,
       process,
       log: vi.fn(),
     }),
     source,
     process,
     checkpoints,
+    deleteAbove,
   };
 }
 
@@ -221,5 +241,110 @@ describe("Scanner source errors", () => {
       "factory",
       103n,
     );
+  });
+});
+
+/**
+ * Reorg rollback, and the coupling it used to have.
+ *
+ * Deletions are chain-scoped; a checkpoint is per stream. The two do not commute. The
+ * old code had every stream delete both tokens and trades across the whole chain while
+ * rewinding only its own checkpoint. Because the curve stream trails the factory by
+ * design — 715,288 blocks on 2026-09-17 — a rollback on the curve stream erased tokens
+ * the factory had already indexed above the rollback point, and the factory checkpoint
+ * stayed put and never re-scanned them. Those launches were gone for good.
+ *
+ * The rule these tests hold in place: delete only what this stream wrote, then pull
+ * back any stream that the deletion left standing above the rollback point.
+ */
+describe("Scanner reorg rollback", () => {
+  const DIVERGED =
+    "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" as Hex;
+
+  it("deletes only the rows this stream owns", async () => {
+    // Confirmation depth 2, checkpoint 100 -> rollback target 98.
+    const test = fixture({ recordedHash: DIVERGED, stream: "curves" });
+
+    await expect(test.scanner.tick()).resolves.toMatchObject({
+      reorged: true,
+      scanned: 0n,
+    });
+
+    expect(test.deleteAbove).toHaveBeenCalledWith(98n);
+    expect(test.checkpoints.rollbackTo).toHaveBeenCalledWith(
+      expect.objectContaining({ chainId: 4663, stream: "curves", toBlock: 98n }),
+    );
+    // Nothing was processed on top of a history that no longer exists.
+    expect(test.process).not.toHaveBeenCalled();
+    expect(test.checkpoints.advance).not.toHaveBeenCalled();
+  });
+
+  it("does not touch another stream when it has nothing to cascade to", async () => {
+    const test = fixture({ recordedHash: DIVERGED, stream: "curves" });
+    await test.scanner.tick();
+    expect(test.checkpoints.rollbackIfAhead).not.toHaveBeenCalled();
+  });
+
+  it("pulls dependent streams back so they cannot claim deleted blocks", async () => {
+    const test = fixture({
+      recordedHash: DIVERGED,
+      stream: "factory",
+      cascadeStreams: ["curves"],
+    });
+
+    await test.scanner.tick();
+
+    expect(test.checkpoints.rollbackIfAhead).toHaveBeenCalledWith(
+      expect.objectContaining({ chainId: 4663, stream: "curves", toBlock: 98n }),
+    );
+  });
+
+  it("leaves a dependent stream alone when it is already below the rollback point", async () => {
+    const test = fixture({
+      recordedHash: DIVERGED,
+      stream: "factory",
+      cascadeStreams: ["curves"],
+    });
+    // This is what `rollbackIfAhead` answers for a stream that is already behind.
+    test.checkpoints.rollbackIfAhead.mockResolvedValue(null);
+
+    await expect(test.scanner.tick()).resolves.toMatchObject({ reorged: true });
+
+    // Asked, and correctly declined — never forced backwards.
+    expect(test.checkpoints.rollbackIfAhead).toHaveBeenCalledOnce();
+    expect(test.checkpoints.rollbackTo).toHaveBeenCalledOnce();
+  });
+
+  it("deletes before moving the checkpoint, so a crash between them re-scans", async () => {
+    const order: string[] = [];
+    const test = fixture({ recordedHash: DIVERGED, stream: "curves" });
+    test.deleteAbove.mockImplementation(async () => {
+      order.push("delete");
+      return { trades: 3 };
+    });
+    test.checkpoints.rollbackTo.mockImplementation(async () => {
+      order.push("rollback");
+    });
+
+    await test.scanner.tick();
+
+    expect(order).toEqual(["delete", "rollback"]);
+  });
+
+  it("does not roll back on an unverifiable hash read", async () => {
+    const test = fixture({ recordedHash: DIVERGED, stream: "curves" });
+    test.source.blockHash.mockRejectedValueOnce(new Error("temporary RPC outage"));
+
+    await expect(test.scanner.tick()).resolves.toMatchObject({ reorged: false });
+    expect(test.deleteAbove).not.toHaveBeenCalled();
+    expect(test.checkpoints.rollbackTo).not.toHaveBeenCalled();
+  });
+
+  it("does not roll back when the recorded hash still matches", async () => {
+    const test = fixture({ recordedHash: HASH, stream: "curves" });
+
+    await expect(test.scanner.tick()).resolves.toMatchObject({ reorged: false });
+    expect(test.deleteAbove).not.toHaveBeenCalled();
+    expect(test.checkpoints.rollbackTo).not.toHaveBeenCalled();
   });
 });

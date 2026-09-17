@@ -161,31 +161,49 @@ describe("factory pair-asset guard", () => {
 
     expect(result.ok).toBe(true);
     const reads = (client.readContract as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    expect(reads.some(([request]) => request.functionName === "approvedPairTokens")).toBe(false);
+    expect(reads.some(([request]) => request.functionName === "approvedPairTokens")).toBe(
+      false,
+    );
   });
 
   it("refuses a pair token that is no longer approved before previewing economics", async () => {
     const client = mockBuilderClient(false);
 
-    const result = await buildLaunchTransaction(client, FACTORY, ROUTER, input({ pairToken: USDG }));
+    const result = await buildLaunchTransaction(
+      client,
+      FACTORY,
+      ROUTER,
+      input({ pairToken: USDG }),
+    );
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.errors.join(" ")).toMatch(/not currently approved/i);
     }
     const reads = (client.readContract as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    expect(reads.some(([request]) => request.functionName === "previewLaunchEconomics")).toBe(false);
+    expect(
+      reads.some(([request]) => request.functionName === "previewLaunchEconomics"),
+    ).toBe(false);
   });
 
   it("uses the live economics preview only after pair approval succeeds", async () => {
     const client = mockBuilderClient(true);
 
-    const result = await buildLaunchTransaction(client, FACTORY, ROUTER, input({ pairToken: USDG }));
+    const result = await buildLaunchTransaction(
+      client,
+      FACTORY,
+      ROUTER,
+      input({ pairToken: USDG }),
+    );
 
     expect(result.ok).toBe(true);
     const reads = (client.readContract as unknown as ReturnType<typeof vi.fn>).mock.calls;
-    expect(reads.some(([request]) => request.functionName === "approvedPairTokens")).toBe(true);
-    expect(reads.some(([request]) => request.functionName === "previewLaunchEconomics")).toBe(true);
+    expect(reads.some(([request]) => request.functionName === "approvedPairTokens")).toBe(
+      true,
+    );
+    expect(
+      reads.some(([request]) => request.functionName === "previewLaunchEconomics"),
+    ).toBe(true);
     if (result.ok) expect(result.launch.value).toBe(LAUNCH_FEE);
   });
 });

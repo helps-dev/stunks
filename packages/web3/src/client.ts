@@ -35,6 +35,13 @@ export interface StunksClientOptions {
    * during the Phase 0 audit.
    */
   readonly multicall?: boolean;
+  /**
+   * How long to collect concurrent reads before sending the batch.
+   *
+   * Short for callers that already issue their reads together through `Promise.all`;
+   * longer when independent call sites need to land in the same batch.
+   */
+  readonly multicallWaitMs?: number;
 }
 
 export interface StunksClient {
@@ -68,9 +75,9 @@ export function createStunksClient(options: StunksClientOptions): StunksClient {
       ? {
           batch: {
             multicall: {
-              // Small window: the indexer issues its reads via Promise.all, so they
-              // are already concurrent and only need a moment to be collected.
-              wait: 10,
+              // Small window by default: the indexer issues its reads via Promise.all,
+              // so they are already concurrent and only need a moment to be collected.
+              wait: options.multicallWaitMs ?? 10,
               batchSize: 1_024,
             },
           },
@@ -96,12 +103,24 @@ export function createStunksClient(options: StunksClientOptions): StunksClient {
 
 /**
  * Read-heavy user-facing client: prefer whichever endpoint is currently fastest.
+ *
+ * Multicall matters MORE here than in the indexer, not less. One render of the landing
+ * page resolves the address graph (10 reads), the factory parameters (6), every launch
+ * config and the fee policy. Every page is `force-dynamic`, so that whole set runs
+ * again on each request, against the same free public endpoints the indexer depends on
+ * — an uncached page was the cheapest way to exhaust the RPC budget the indexer needs.
+ *
+ * The batching window is wider than the indexer's 10 ms because these reads are issued
+ * by several independent server components rather than one `Promise.all`, so they need
+ * slightly longer to be collected into the same call.
  */
 export function createReadClient(
   endpoints: readonly (string | EndpointConfig)[],
 ): StunksClient {
   return createStunksClient({
     endpoints,
+    multicall: true,
+    multicallWaitMs: 40,
     pool: { strategy: "fastest", attemptsPerEndpoint: 2, timeoutMs: 10_000 },
   });
 }

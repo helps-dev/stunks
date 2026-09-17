@@ -1755,6 +1755,25 @@ table.compact td {
   font-size: 0.74rem;
 }
 
+/* Per-stream breakdown: the headline is the slowest stream, this says which is which. */
+.indexer-streams {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.7rem;
+  color: var(--muted);
+}
+
+.indexer-stream-name {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.64rem;
+  color: var(--text);
+}
+
 .section-heading {
   display: flex;
   align-items: flex-end;

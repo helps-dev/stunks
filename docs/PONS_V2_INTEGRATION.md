@@ -16,10 +16,10 @@
 
 ### Published (from the repo README)
 
-| Generation | Contract | Address | Deployed code |
-| --- | --- | --- | --- |
-| V1 | `PonsLaunchFactory` | `0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB` | 24,353 B |
-| V2 | `PonsV2LaunchFactory` | `0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e` | 24,177 B |
+| Generation | Contract              | Address                                      | Deployed code |
+| ---------- | --------------------- | -------------------------------------------- | ------------- |
+| V1         | `PonsLaunchFactory`   | `0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB` | 24,353 B      |
+| V2         | `PonsV2LaunchFactory` | `0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e` | 24,177 B      |
 
 STUNKS V1 integrates **V2 only**. V1 is a different protocol (day-one Uniswap V3
 pool, no curve) and is out of scope.
@@ -35,20 +35,20 @@ block 26,841,846   2026-08-03T14:41:19Z    ← INDEXER_START_BLOCK
 Every address below was read from the deployed factory or hook at audit time.
 All have code. None of these appear in the repo README.
 
-| Role | Getter | Address | Code |
-| --- | --- | --- | --- |
-| Meme hook / fee policy | `memeHook()` | `0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044` | 15,167 B |
-| Graduation executor | `graduationExecutor()` | `0xC7819B64A1dAECD7eC19856d026cb14EfBd89046` | 4,402 B |
-| Launch deployer | `launchDeployer()` | `0x3711ceA4feaDE896C913C68F01Eda97Cb06D1A42` | 20,906 B |
-| Launch locker | `locker()` | `0x267444D099b10fB5Ed7c3Cc7B7c767AdcA574952` | 1,969 B |
-| Buyback vault | `buybackVault()` | `0x42df2a798f82289E177311362e8f5ccC45c1219c` | 4,602 B |
-| Graduation guard | `graduationGuard()` | `0xf5695117b99B6f6401e67d4195BD653628176C6C` | 2,896 B |
-| Launch forwarder | `launchForwarder()` | `0xe33E9E479dF8802cb0866d5d05258bEc4cF62948` | 4,416 B |
-| Uniswap V4 PoolManager | `poolManager()` | `0x8366a39CC670B4001A1121B8F6A443A643e40951` | 24,009 B |
-| Uniswap V4 PositionManager | `positionManager()` | `0x58daec3116aae6D93017bAAea7749052E8a04fA7` | 23,877 B |
-| Fee escrow | `memeHook.feeEscrow()` | `0xd3AFEB2a57f70eF218Aa82451c51B2fb0416Ac9e` | — |
-| Protocol owner / fee recipient | `owner()` | `0x263ed295dAFaE1d9AAdD6E56c4B6F9f38eE019Dd` | EOA |
-| Fee sweep operator | `memeHook.feeSweepOperator()` | `0x49BbF2b70955Fb3a106e084D4BFDa92d334573d2` | EOA |
+| Role                           | Getter                        | Address                                      | Code     |
+| ------------------------------ | ----------------------------- | -------------------------------------------- | -------- |
+| Meme hook / fee policy         | `memeHook()`                  | `0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044` | 15,167 B |
+| Graduation executor            | `graduationExecutor()`        | `0xC7819B64A1dAECD7eC19856d026cb14EfBd89046` | 4,402 B  |
+| Launch deployer                | `launchDeployer()`            | `0x3711ceA4feaDE896C913C68F01Eda97Cb06D1A42` | 20,906 B |
+| Launch locker                  | `locker()`                    | `0x267444D099b10fB5Ed7c3Cc7B7c767AdcA574952` | 1,969 B  |
+| Buyback vault                  | `buybackVault()`              | `0x42df2a798f82289E177311362e8f5ccC45c1219c` | 4,602 B  |
+| Graduation guard               | `graduationGuard()`           | `0xf5695117b99B6f6401e67d4195BD653628176C6C` | 2,896 B  |
+| Launch forwarder               | `launchForwarder()`           | `0xe33E9E479dF8802cb0866d5d05258bEc4cF62948` | 4,416 B  |
+| Uniswap V4 PoolManager         | `poolManager()`               | `0x8366a39CC670B4001A1121B8F6A443A643e40951` | 24,009 B |
+| Uniswap V4 PositionManager     | `positionManager()`           | `0x58daec3116aae6D93017bAAea7749052E8a04fA7` | 23,877 B |
+| Fee escrow                     | `memeHook.feeEscrow()`        | `0xd3AFEB2a57f70eF218Aa82451c51B2fb0416Ac9e` | —        |
+| Protocol owner / fee recipient | `owner()`                     | `0x263ed295dAFaE1d9AAdD6E56c4B6F9f38eE019Dd` | EOA      |
+| Fee sweep operator             | `memeHook.feeSweepOperator()` | `0x49BbF2b70955Fb3a106e084D4BFDa92d334573d2` | EOA      |
 
 **Naming traps found during verification:**
 
@@ -71,28 +71,28 @@ so a hardcoded list goes stale silently.
 
 `getLaunchConfig(0)`:
 
-| Field | Raw value | Meaning |
-| --- | --- | --- |
-| `supply` | `1000000000000000000000000000` | 1,000,000,000 tokens @ 18 dp |
-| `curveFeeBps` | `100` | 1.00% base trade fee |
-| `phantomQuote` | `1680000000000000000` | 1.68 ETH virtual reserve |
-| `graduationThreshold` | `4200000000000000000` | 4.2 ETH real quote reserve |
-| `poolFee` | `0` | V4 LP fee tier (see §7) |
-| `tickSpacing` | `200` | V4 tick spacing |
-| `enabled` | `true` | selectable |
+| Field                 | Raw value                      | Meaning                      |
+| --------------------- | ------------------------------ | ---------------------------- |
+| `supply`              | `1000000000000000000000000000` | 1,000,000,000 tokens @ 18 dp |
+| `curveFeeBps`         | `100`                          | 1.00% base trade fee         |
+| `phantomQuote`        | `1680000000000000000`          | 1.68 ETH virtual reserve     |
+| `graduationThreshold` | `4200000000000000000`          | 4.2 ETH real quote reserve   |
+| `poolFee`             | `0`                            | V4 LP fee tier (see §7)      |
+| `tickSpacing`         | `200`                          | V4 tick spacing              |
+| `enabled`             | `true`                         | selectable                   |
 
 Derived: `reservedTokens` = 285,714,285,714,285,714,285,714,285 → **28.571%** of
 supply is held back to seed the V4 pool, **71.429%** is sellable on the curve.
 
 ### Factory-level launch parameters (all owner-mutable → read live)
 
-| Getter | Live value | Repo source says | Note |
-| --- | --- | --- | --- |
-| `launchFee()` | `500000000000000` (0.0005 ETH) | — | paid on `launchToken` |
-| `launchEnabled()` | `true` | — | global kill switch |
-| `maxCreatorTaxBps()` | `1000` (10%) | — | ceiling on creator tax |
-| `snipeTaxStartBps()` | `9900` (**99%**) | `9900` | anti-snipe start |
-| `snipeTaxSeconds()` | **`3`** | **`15`** | **source is stale — read live** |
+| Getter               | Live value                     | Repo source says | Note                            |
+| -------------------- | ------------------------------ | ---------------- | ------------------------------- |
+| `launchFee()`        | `500000000000000` (0.0005 ETH) | —                | paid on `launchToken`           |
+| `launchEnabled()`    | `true`                         | —                | global kill switch              |
+| `maxCreatorTaxBps()` | `1000` (10%)                   | —                | ceiling on creator tax          |
+| `snipeTaxStartBps()` | `9900` (**99%**)               | `9900`           | anti-snipe start                |
+| `snipeTaxSeconds()`  | **`3`**                        | **`15`**         | **source is stale — read live** |
 
 `snipeTaxSeconds` differing between source and chain is direct proof that these
 values must be read at runtime, and that the repo cannot be trusted for constants.
@@ -263,11 +263,11 @@ on a **sell** it is taken from the output after pricing. Both are quote-denomina
 
 Verified exact to the wei against `eth_call` on a live curve:
 
-| Input | Off-chain prediction | On-chain simulation | Match |
-| --- | --- | --- | --- |
-| 0.01 ETH | `5740664023199384506125347` | `5740664023199384506125347` | yes |
-| 0.1 ETH | `54586381541924592009003939` | `54586381541924592009003939` | yes |
-| 1 ETH | `366037735849056603773584905` | `366037735849056603773584905` | yes |
+| Input    | Off-chain prediction          | On-chain simulation           | Match |
+| -------- | ----------------------------- | ----------------------------- | ----- |
+| 0.01 ETH | `5740664023199384506125347`   | `5740664023199384506125347`   | yes   |
+| 0.1 ETH  | `54586381541924592009003939`  | `54586381541924592009003939`  | yes   |
+| 1 ETH    | `366037735849056603773584905` | `366037735849056603773584905` | yes   |
 
 All divisions are floor. Reproducing this requires `bigint` throughout — one
 float conversion breaks the match.
@@ -318,7 +318,7 @@ createGraduatedPool(address token)  — permissionless; seeds V4 pool, RETRYABLE
 `_tryAutoGraduate()` runs inside the threshold-crossing buy but **swallows
 failure** and emits `AutoGraduationFailed(token, gasRemaining)`. So a token can
 sit in `Swept` with no pool. Both progression calls are permissionless, meaning
-STUNKS *may* offer a "complete graduation" action — but only after the exact
+STUNKS _may_ offer a "complete graduation" action — but only after the exact
 gas and revert behaviour is characterised on a real stuck launch. No graduation
 bot in Phase 1–5.
 
@@ -389,13 +389,13 @@ uses launch config 0; every ERC-20 pair carries its own economics.
 
 Spot-verified against the chain:
 
-| Pair | Address | Dec | `phantomQuote` | `graduationThreshold` |
-| --- | --- | --- | --- | --- |
-| USDG | `0x5fc5360d0400a0fd4f2af552add042d716f1d168` | **6** | `3236000000` | `8090000000` |
-| NVDA | `0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec` | 18 | `16640000000000000000` | `41600000000000000000` |
-| TSLA | `0x322f0929c4625ed5bad873c95208d54e1c003b2d` | 18 | `10400000000000000000` | `26000000000000000000` |
-| AAPL | `0xaf3d76f1834a1d425780943c99ea8a608f8a93f9` | 18 | `9680000000000000000` | `24200000000000000000` |
-| MSFT | `0xe93237c50d904957cf27e7b1133b510c669c2e74` | 18 | `6431455767077268559` | `16078639417693171399` |
+| Pair | Address                                      | Dec   | `phantomQuote`         | `graduationThreshold`  |
+| ---- | -------------------------------------------- | ----- | ---------------------- | ---------------------- |
+| USDG | `0x5fc5360d0400a0fd4f2af552add042d716f1d168` | **6** | `3236000000`           | `8090000000`           |
+| NVDA | `0xd0601ce157db5bdc3162bbac2a2c8af5320d9eec` | 18    | `16640000000000000000` | `41600000000000000000` |
+| TSLA | `0x322f0929c4625ed5bad873c95208d54e1c003b2d` | 18    | `10400000000000000000` | `26000000000000000000` |
+| AAPL | `0xaf3d76f1834a1d425780943c99ea8a608f8a93f9` | 18    | `9680000000000000000`  | `24200000000000000000` |
+| MSFT | `0xe93237c50d904957cf27e7b1133b510c669c2e74` | 18    | `6431455767077268559`  | `16078639417693171399` |
 
 Third-party documentation lists 11 approved ERC-20 pairs in total (adding SPCX,
 SNAP, SPY, QQQ, BB, F). The five above were re-read directly and matched exactly,
@@ -464,13 +464,13 @@ The published V2 source set is internally inconsistent and would not compile.
 Bytecode scanning of the deployed curve proves the deployed version has the
 subsystem:
 
-| Selector | Function | In repo source? |
-| --- | --- | --- |
-| `0x31ff7f22` | `exemptFromSnipeTax(address)` | **no** |
-| `0x50e25ac2` | `snipeTaxStartBps()` | **no** |
-| `0x6783774b` | `snipeTaxSeconds()` | **no** |
-| `0xbf56b371` | `launchedAt()` | **no** |
-| `0xd44bdfe7` | `snipeTaxExempt(address)` | **no** |
+| Selector     | Function                      | In repo source? |
+| ------------ | ----------------------------- | --------------- |
+| `0x31ff7f22` | `exemptFromSnipeTax(address)` | **no**          |
+| `0x50e25ac2` | `snipeTaxStartBps()`          | **no**          |
+| `0x6783774b` | `snipeTaxSeconds()`           | **no**          |
+| `0xbf56b371` | `launchedAt()`                | **no**          |
+| `0xd44bdfe7` | `snipeTaxExempt(address)`     | **no**          |
 
 Live values on the TIKI curve: `snipeTaxStartBps = 9900` (**99%**),
 `snipeTaxSeconds = 3`, `launchedAt = 1789453633`. These are per-curve, so read
@@ -483,13 +483,13 @@ Because the source is unavailable, the snipe tax was characterised by simulating
 `eth_call` with a balance state override. Launch block `63,444,887`,
 `launchedAt = 1789453633`, `snipeTaxSeconds = 3`.
 
-| # | Sender | Recipient | Block (age) | Tokens out |
-| --- | --- | --- | --- | --- |
-| A | exempt deployer | exempt deployer | 63,444,888 (0 s) | `28059010702921608330922765` |
-| B | non-exempt | non-exempt | 63,444,888 (0 s) | `297530496875929782802737` |
-| C | **non-exempt** | **exempt deployer** | 63,444,888 (0 s) | `28059010702921608330922765` |
-| D | exempt deployer | **non-exempt** | 63,444,888 (0 s) | `297530496875929782802737` |
-| E | non-exempt | non-exempt | 63,444,913 (3 s) | `28059010702921608330922765` |
+| #   | Sender          | Recipient           | Block (age)      | Tokens out                   |
+| --- | --------------- | ------------------- | ---------------- | ---------------------------- |
+| A   | exempt deployer | exempt deployer     | 63,444,888 (0 s) | `28059010702921608330922765` |
+| B   | non-exempt      | non-exempt          | 63,444,888 (0 s) | `297530496875929782802737`   |
+| C   | **non-exempt**  | **exempt deployer** | 63,444,888 (0 s) | `28059010702921608330922765` |
+| D   | exempt deployer | **non-exempt**      | 63,444,888 (0 s) | `297530496875929782802737`   |
+| E   | non-exempt      | non-exempt          | 63,444,913 (3 s) | `28059010702921608330922765` |
 
 Three facts follow, and all three are load-bearing for the STUNKS whitelist
 feature:
@@ -512,13 +512,13 @@ Swept on curve `0x9bbA…1870`, a launch that declared a **real** whitelist. Sen
 held constant (one non-whitelisted wallet); only `recipient` varied. Same block
 means same reserves, so the ratio isolates the tax.
 
-| Age (s) | Whitelisted recipient | Non-whitelisted recipient | Implied tax |
-| --- | --- | --- | --- |
-| 0 | full | ~1% of full | **~98.94%** |
-| 1 | `28059010702921608330922765` | `26318382297540874342909801` | **6.20%** |
-| 2 | `15902399517500391236905098` | `15871909518796072853382156` | **0.19%** |
-| 3 | identical | identical | **0.00%** |
-| 4 | identical | identical | 0.00% |
+| Age (s) | Whitelisted recipient        | Non-whitelisted recipient    | Implied tax |
+| ------- | ---------------------------- | ---------------------------- | ----------- |
+| 0       | full                         | ~1% of full                  | **~98.94%** |
+| 1       | `28059010702921608330922765` | `26318382297540874342909801` | **6.20%**   |
+| 2       | `15902399517500391236905098` | `15871909518796072853382156` | **0.19%**   |
+| 3       | identical                    | identical                    | **0.00%**   |
+| 4       | identical                    | identical                    | 0.00%       |
 
 The decay is **steep and non-linear**, not a straight line from 99% to 0. The
 practical protection lives almost entirely in the **first second**. By age 2 the
@@ -547,12 +547,12 @@ snipeTaxBps = snipeTaxStartBps >> floor(elapsed * 14 / snipeTaxSeconds)
 
 Evaluated with the live values `snipeTaxStartBps = 9900`, `snipeTaxSeconds = 3`:
 
-| Age | shift | Formula bps | Independently measured |
-| --- | --- | --- | --- |
-| 0 s | 0 | 9900 (99.00%) | ~98.94% |
-| 1 s | 4 | 618 (6.18%) | 6.20% |
-| 2 s | 9 | 19 (0.19%) | 0.19% |
-| 3 s | 14 | 0 (0.00%) | 0.00% |
+| Age | shift | Formula bps   | Independently measured |
+| --- | ----- | ------------- | ---------------------- |
+| 0 s | 0     | 9900 (99.00%) | ~98.94%                |
+| 1 s | 4     | 618 (6.18%)   | 6.20%                  |
+| 2 s | 9     | 19 (0.19%)    | 0.19%                  |
+| 3 s | 14    | 0 (0.00%)     | 0.00%                  |
 
 The formula reproduces measurements taken **before** that document was available,
 which is strong mutual corroboration. 14 shifts is chosen because 2^14 = 16384
@@ -697,14 +697,14 @@ Current assumption:
 
 ## 10. Fee model — live values
 
-Read from `PonsV2MemeHook` (which *is* `IPonsV2FeePolicy`):
+Read from `PonsV2MemeHook` (which _is_ `IPonsV2FeePolicy`):
 
-| Parameter | Value |
-| --- | --- |
-| `protocolFeeShareBps` | `3000` (30%) |
-| `buybackBurnBps` | `5000` (50%) |
-| `hookFeeBps` | `100` (1%) |
-| `maxInternalPriceImpactBps` | `300` (3%) |
+| Parameter                   | Value        |
+| --------------------------- | ------------ |
+| `protocolFeeShareBps`       | `3000` (30%) |
+| `buybackBurnBps`            | `5000` (50%) |
+| `hookFeeBps`                | `100` (1%)   |
+| `maxInternalPriceImpactBps` | `300` (3%)   |
 
 Split arithmetic, from the curve's `_sweepFees`:
 

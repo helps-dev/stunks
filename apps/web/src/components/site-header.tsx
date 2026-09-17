@@ -33,7 +33,8 @@ export function SiteHeader() {
 
         <nav className="site-nav" aria-label="Primary navigation">
           {navigation.map((item) => {
-            const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+            const active =
+              item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
             return (
               <Link
                 key={item.href}

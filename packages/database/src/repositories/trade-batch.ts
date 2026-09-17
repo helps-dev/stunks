@@ -191,7 +191,9 @@ export class TokenBatchRepository {
   /** Curve addresses for many tokens, so a batch can be read from chain concurrently. */
   async curveAddressesFor(
     tokenIds: readonly string[],
-  ): Promise<Map<string, { curveAddress: string; totalSupply: bigint; holderCount: number }>> {
+  ): Promise<
+    Map<string, { curveAddress: string; totalSupply: bigint; holderCount: number }>
+  > {
     const result = new Map<
       string,
       { curveAddress: string; totalSupply: bigint; holderCount: number }
@@ -231,7 +233,8 @@ export class TokenBatchRepository {
   ): Promise<number> {
     if (rows.length === 0) return 0;
 
-    const values = rows.map(({ tokenId, stats }) => Prisma.sql`
+    const values = rows.map(
+      ({ tokenId, stats }) => Prisma.sql`
       (
         ${tokenId},
         ${toDecimal(stats.realQuoteReserve)},
@@ -246,7 +249,8 @@ export class TokenBatchRepository {
         ${stats.sellCount},
         ${stats.lastTradeAt ?? null}
       )
-    `);
+    `,
+    );
 
     return this.prisma.$executeRaw`
       UPDATE tokens AS t

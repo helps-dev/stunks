@@ -85,14 +85,30 @@ export default async function Page() {
   const telemetry = snapshot.ok
     ? {
         chain: [
-          { label: "Chain", value: `Robinhood Chain (${snapshot.chainId})`, source: "eth_chainId" },
-          { label: "Head block", value: snapshot.blockNumber.toString(), source: "eth_getBlockByNumber" },
+          {
+            label: "Chain",
+            value: `Robinhood Chain (${snapshot.chainId})`,
+            source: "eth_chainId",
+          },
+          {
+            label: "Head block",
+            value: snapshot.blockNumber.toString(),
+            source: "eth_getBlockByNumber",
+          },
           {
             label: "Block time",
             value: `~${BLOCK_TIME_SECONDS}s · ${BLOCKS_PER_DAY.toLocaleString("en-US")} blocks/day`,
             source: "Phase 0 measurement",
           },
           { label: "RPC", value: snapshot.endpoint, source: "configuration" },
+          {
+            // Stated rather than implied: the head above is this request, the protocol
+            // values below may be up to a minute old. Saying so is the whole reason
+            // the cache is allowed to exist.
+            label: "Protocol read",
+            value: snapshot.protocolReadAt,
+            source: "cached up to 60s",
+          },
         ] satisfies readonly TelemetryRow[],
         protocol: [
           {
@@ -129,24 +145,20 @@ export default async function Page() {
       }
     : null;
 
-  const activeConfig = snapshot.ok ? snapshot.configs.find((config) => config.enabled) : null;
-  const reserved = snapshot.ok && activeConfig
-    ? snapshot.reservedTokensByConfig[snapshot.configs.indexOf(activeConfig)] ?? 0n
+  const activeConfig = snapshot.ok
+    ? snapshot.configs.find((config) => config.enabled)
     : null;
-  const reservedBps = activeConfig && reserved !== null
-    ? ratioBps(reserved, activeConfig.supply)
-    : null;
+  const reserved =
+    snapshot.ok && activeConfig
+      ? (snapshot.reservedTokensByConfig[snapshot.configs.indexOf(activeConfig)] ?? 0n)
+      : null;
+  const reservedBps =
+    activeConfig && reserved !== null ? ratioBps(reserved, activeConfig.supply) : null;
 
   return (
     <main className="home-main">
       <section className="home-hero">
-        <Image
-          src={heroBackdrop}
-          alt=""
-          fill
-          sizes="100vw"
-          className="hero-backdrop"
-        />
+        <Image src={heroBackdrop} alt="" fill sizes="100vw" className="hero-backdrop" />
         <div className="home-hero-inner">
           <div className="hero-copy">
             <p className="hero-eyebrow">Robinhood Chain · Pons V2</p>
@@ -156,8 +168,8 @@ export default async function Page() {
             </h1>
             <p>
               A non-custodial launchpad and curve-trading interface for real Pons V2
-              launches. No private keys, no synthetic market data, and no STUNKS
-              platform fee.
+              launches. No private keys, no synthetic market data, and no STUNKS platform
+              fee.
             </p>
             <div className="hero-actions">
               <Link href="/explore" className="btn btn-primary">
@@ -195,11 +207,15 @@ export default async function Page() {
                     </div>
                     <div>
                       <span className="card-label">Creators</span>
-                      <strong>{indexed.stats.creatorCount.toLocaleString("en-US")}</strong>
+                      <strong>
+                        {indexed.stats.creatorCount.toLocaleString("en-US")}
+                      </strong>
                     </div>
                     <div>
                       <span className="card-label">Graduated</span>
-                      <strong>{indexed.stats.graduatedCount.toLocaleString("en-US")}</strong>
+                      <strong>
+                        {indexed.stats.graduatedCount.toLocaleString("en-US")}
+                      </strong>
                     </div>
                   </div>
                   <div
@@ -215,7 +231,11 @@ export default async function Page() {
                         ? `Indexed to ${indexed.trending.staleness.indexedBlock} — ${formatBlockLag(
                             BigInt(indexed.trending.staleness.lagBlocks),
                             BLOCK_TIME_SECONDS,
-                          )}${indexed.trending.staleness.isStale ? " behind chain" : " current"}`
+                          )}${indexed.trending.staleness.isStale ? " behind chain" : " current"}${
+                            indexed.trending.staleness.stream !== null
+                              ? ` (${indexed.trending.staleness.stream} stream)`
+                              : ""
+                          }`
                         : "Live chain unavailable — indexed figures only"}
                     </p>
                   </div>
@@ -248,7 +268,9 @@ export default async function Page() {
           <article className="panel feature-card">
             <span className="feature-icon">⇄</span>
             <h3>Trade</h3>
-            <p>Get a fresh curve quote, real min-out protection, and explicit approvals.</p>
+            <p>
+              Get a fresh curve quote, real min-out protection, and explicit approvals.
+            </p>
             <Link href="/explore">Find a curve token →</Link>
           </article>
           <article className="panel feature-card">
@@ -260,7 +282,9 @@ export default async function Page() {
           <article className="panel feature-card">
             <span className="feature-icon">◈</span>
             <h3>Protected launch</h3>
-            <p>Use the verified 31-address exemption cap with honest anti-snipe disclosure.</p>
+            <p>
+              Use the verified 31-address exemption cap with honest anti-snipe disclosure.
+            </p>
             <Link href="/launch">Set up protection →</Link>
           </article>
         </section>
@@ -289,7 +313,9 @@ export default async function Page() {
                       <td className="source">{index + 1}</td>
                       <td>
                         <div className="home-token-cell">
-                          <span className="token-avatar">{token.symbol.slice(0, 2).toUpperCase()}</span>
+                          <span className="token-avatar">
+                            {token.symbol.slice(0, 2).toUpperCase()}
+                          </span>
                           <span>
                             <span className="home-token-symbol">{token.symbol}</span>
                             <span className="home-token-name">{token.name}</span>
@@ -302,7 +328,9 @@ export default async function Page() {
                       <td className="value">
                         {formatCompact(BigInt(token.volume24h), token.pairTokenDecimals)}
                       </td>
-                      <td className="value">{token.tradeCount.toLocaleString("en-US")}</td>
+                      <td className="value">
+                        {token.tradeCount.toLocaleString("en-US")}
+                      </td>
                       <td>
                         <Link href={`/token/${token.address}`} className="badge ok">
                           Trade
@@ -337,14 +365,18 @@ export default async function Page() {
                 <span className="trust-row-icon">◌</span>
                 <div>
                   <strong>Honest data freshness</strong>
-                  <p>Indexer lag is surfaced rather than hidden behind a fake live chart.</p>
+                  <p>
+                    Indexer lag is surfaced rather than hidden behind a fake live chart.
+                  </p>
                 </div>
               </div>
               <div className="trust-row">
                 <span className="trust-row-icon">◈</span>
                 <div>
                   <strong>Non-custodial</strong>
-                  <p>Your wallet signs. STUNKS never receives a seed phrase or private key.</p>
+                  <p>
+                    Your wallet signs. STUNKS never receives a seed phrase or private key.
+                  </p>
                 </div>
               </div>
             </div>
@@ -399,7 +431,9 @@ export default async function Page() {
                 <p style={{ color: "var(--text)", marginBottom: 8 }}>
                   No RPC endpoint answered, so live protocol telemetry is not shown.
                 </p>
-                <p className="hint mono">{snapshotError?.message ?? "Unknown RPC error"}</p>
+                <p className="hint mono">
+                  {snapshotError?.message ?? "Unknown RPC error"}
+                </p>
                 <p className="hint">
                   Endpoints tried: {snapshotError?.endpointsTried.join(", ") ?? "unknown"}
                 </p>

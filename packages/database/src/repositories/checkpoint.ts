@@ -115,6 +115,32 @@ export class CheckpointRepository {
   }
 
   /**
+   * Pull a stream back only if it currently sits above `toBlock`.
+   *
+   * A reorg rollback deletes rows at CHAIN scope, but a checkpoint is per stream. If
+   * one stream deletes rows that another stream has already counted as processed, the
+   * second stream's checkpoint is now a lie: it will never re-scan those blocks, so
+   * the deleted rows never come back.
+   *
+   * This is the cascade for that case. It is a no-op for a stream already at or below
+   * the rollback point, so a stream far behind the divergence is never dragged
+   * backwards for nothing.
+   */
+  async rollbackIfAhead(args: {
+    chainId: number;
+    stream: string;
+    toBlock: bigint;
+    reason: string;
+  }): Promise<CheckpointState | null> {
+    const current = await this.prisma.indexerState.findUnique({
+      where: { chainId_stream: { chainId: args.chainId, stream: args.stream } },
+    });
+    if (!current || current.lastProcessedBlock <= args.toBlock) return null;
+
+    return this.rollbackTo(args);
+  }
+
+  /**
    * Skip forward over a range that provably cannot contain anything for this stream.
    *
    * The one legitimate use is the curve stream: a curve cannot emit a trade before it

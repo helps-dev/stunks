@@ -35,10 +35,18 @@ export function TokenCard({ token }: { token: SerialisedToken }) {
   const quoteDecimals = token.pairTokenDecimals;
   const isNative = /^0x0{40}$/i.test(token.pairTokenAddress);
   const quoteSymbol = isNative ? "ETH" : "quote";
-  const avatar = token.symbol.replace(/[^a-z0-9]/gi, "").slice(0, 2).toUpperCase() || "?";
+  const avatar =
+    token.symbol
+      .replace(/[^a-z0-9]/gi, "")
+      .slice(0, 2)
+      .toUpperCase() || "?";
 
   return (
-    <a href={`/token/${token.address}`} className="card" aria-label={`Open ${token.symbol}`}>
+    <a
+      href={`/token/${token.address}`}
+      className="card"
+      aria-label={`Open ${token.symbol}`}
+    >
       <div className="card-head">
         <div className="card-title">
           <span className="token-avatar" aria-hidden="true">
@@ -67,7 +75,9 @@ export function TokenCard({ token }: { token: SerialisedToken }) {
         </div>
         <div>
           <span className="card-label">Trades</span>
-          <span className="card-value mono">{token.tradeCount.toLocaleString("en-US")}</span>
+          <span className="card-value mono">
+            {token.tradeCount.toLocaleString("en-US")}
+          </span>
         </div>
         <div>
           <span className="card-label">Creator tax</span>
@@ -83,19 +93,24 @@ export function TokenCard({ token }: { token: SerialisedToken }) {
               style={{ width: `${Math.min(100, token.graduationBps / 100)}%` }}
             />
           </div>
-          <span className="card-label">{formatProgress(token.graduationBps)} to graduation</span>
+          <span className="card-label">
+            {formatProgress(token.graduationBps)} to graduation
+          </span>
         </div>
       )}
 
       {token.phase === "SWEPT" && (
         <p className="card-note">
-          Curve finished; its Uniswap pool is not created yet, so it is not tradeable here.
+          Curve finished; its Uniswap pool is not created yet, so it is not tradeable
+          here.
         </p>
       )}
 
       <div className="card-foot">
         <span className="card-label mono">{shortAddress(token.creatorAddress)}</span>
-        <span className="card-label">{formatRelativeTime(new Date(token.createdAt))}</span>
+        <span className="card-label">
+          {formatRelativeTime(new Date(token.createdAt))}
+        </span>
         {token.hadWhitelistBundle && (
           <span className="badge" title="This launch pre-declared whitelisted buyers">
             {token.whitelistSize} whitelist

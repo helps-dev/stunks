@@ -56,6 +56,19 @@ export interface ScannerOptions {
    */
   readonly maxBlock?: () => Promise<bigint | null>;
   readonly process: ProcessLogs;
+  /**
+   * Delete the rows THIS stream wrote above a rollback point, and report the counts.
+   *
+   * Per stream rather than shared, because the deletions are chain-scoped while a
+   * checkpoint is not: a stream that deletes another stream's rows leaves that stream
+   * claiming to have processed blocks whose rows no longer exist. See `handleReorg`.
+   */
+  readonly deleteAbove: (rollbackTo: bigint) => Promise<Record<string, number>>;
+  /**
+   * Streams that must not be left sitting above this stream's rollback point, because
+   * this stream's deletion invalidated data they depend on.
+   */
+  readonly cascadeStreams?: readonly string[];
   readonly log: (message: string, meta?: Record<string, unknown>) => void;
 }
 
@@ -232,12 +245,20 @@ export class Scanner {
         // even have partially written idempotent rows before the outage; retrying from
         // the unchanged checkpoint is safe and must not leave a permanent false
         // failed-block row.
-        return this.handleDatabaseFailure(fromBlock, checkpoint.lastProcessedBlock, error);
+        return this.handleDatabaseFailure(
+          fromBlock,
+          checkpoint.lastProcessedBlock,
+          error,
+        );
       }
       // The processor reached a concrete log range and could not make sense of it.
       // Keep this block visible for diagnosis and bounded retry.
       const message = error instanceof Error ? error.message : String(error);
-      await options.repos.checkpoints.recordError(options.chainId, options.stream, message);
+      await options.repos.checkpoints.recordError(
+        options.chainId,
+        options.stream,
+        message,
+      );
       await options.repos.checkpoints.recordFailedBlock({
         chainId: options.chainId,
         stream: options.stream,
@@ -264,12 +285,20 @@ export class Scanner {
       );
     } catch (error) {
       if (isDatabaseAvailabilityError(error)) {
-        return this.handleDatabaseFailure(fromBlock, checkpoint.lastProcessedBlock, error);
+        return this.handleDatabaseFailure(
+          fromBlock,
+          checkpoint.lastProcessedBlock,
+          error,
+        );
       }
       // Database/checkpoint failures are infrastructure incidents, not bad chain
       // blocks. Surface and retry them without poisoning the failed-block table.
       const message = error instanceof Error ? error.message : String(error);
-      await options.repos.checkpoints.recordError(options.chainId, options.stream, message);
+      await options.repos.checkpoints.recordError(
+        options.chainId,
+        options.stream,
+        message,
+      );
       throw error;
     }
 
@@ -420,30 +449,49 @@ export class Scanner {
       rollbackTo: verdict.rollbackTo.toString(),
     });
 
+    const reason = `hash mismatch at ${recordedBlock}`;
+
     // Delete first, then move the checkpoint. If this crashes in between, the
     // checkpoint still points above the deletion and the blocks are re-scanned —
     // which is safe, because every write is idempotent. The reverse order could
     // leave orphaned rows below a rewound checkpoint.
-    const deletedTrades = await this.options.repos.trades.deleteAboveBlock(
-      this.options.chainId,
-      verdict.rollbackTo,
-    );
-    const deletedTokens = await this.options.repos.tokens.deleteAboveBlock(
-      this.options.chainId,
-      verdict.rollbackTo,
-    );
+    //
+    // A stream deletes ONLY the rows it writes. An earlier version had every stream
+    // delete both tokens and trades at chain scope while rewinding just its own
+    // checkpoint, and the two do not commute: the curve stream trails the factory by
+    // design — measured at 715,288 blocks on 2026-09-17 — so a rollback there erased
+    // every token the factory had already indexed above the rollback point, while the
+    // factory checkpoint stayed put and therefore never re-scanned them. The tokens
+    // were gone permanently, and their later trades then failed to resolve and were
+    // counted as `unmatched`.
+    const deleted = await this.options.deleteAbove(verdict.rollbackTo);
 
     await this.options.repos.checkpoints.rollbackTo({
       chainId: this.options.chainId,
       stream: this.options.stream,
       toBlock: verdict.rollbackTo,
-      reason: `hash mismatch at ${recordedBlock}`,
+      reason,
     });
+
+    // Anything this deletion invalidated for another stream has to come back with it.
+    // `rollbackIfAhead` is a no-op for a stream already at or below the rollback
+    // point, so a stream far behind the divergence is never dragged back for nothing.
+    const cascaded: string[] = [];
+    for (const dependent of this.options.cascadeStreams ?? []) {
+      const moved = await this.options.repos.checkpoints.rollbackIfAhead({
+        chainId: this.options.chainId,
+        stream: dependent,
+        toBlock: verdict.rollbackTo,
+        reason: `${reason} (cascaded from the ${this.options.stream} stream)`,
+      });
+      if (moved) cascaded.push(dependent);
+    }
 
     this.options.log("rollback complete", {
       stream: this.options.stream,
-      deletedTrades,
-      deletedTokens,
+      rollbackTo: verdict.rollbackTo.toString(),
+      deleted,
+      cascaded,
     });
 
     return true;

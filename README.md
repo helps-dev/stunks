@@ -7,9 +7,15 @@ infrastructure, with **Uniswap V4** as the venue for graduated tokens.
 STUNKS is the product layer. Pons V2 is the protocol layer. STUNKS deploys no
 launch, curve, or liquidity contracts of its own.
 
-**Status: Phase 1 (foundation) complete.** There is no trading, no launching, and
-no indexed data yet. The one page that exists reads live Pons state and labels
-every value with where it came from.
+**Status: phases 1–6 built.** Launching (including the Protected Launch bundle),
+curve trading, the indexer, the token page and explore all exist and run against
+mainnet. Graduated tokens are deliberately not tradeable here yet — see R26.
+
+As of 2026-09-17 the indexed database holds 20,258 tokens, 370,312 trades and
+15,612 creators. That number is not a boast: the curve stream was 715,288 blocks
+behind the head at the time, which is roughly twenty hours. Indexer throughput on
+free public RPC is the open operational problem, not a solved one — see
+[Operating the indexer](#operating-the-indexer).
 
 ---
 
@@ -19,17 +25,16 @@ A Phase 0 audit verified every integration-critical fact directly against mainne
 rather than trusting documentation. Four assumptions from the original PRD turned
 out to be **wrong**, and one upstream inconsistency shapes the whole design:
 
-| Assumption | Reality |
-| --- | --- |
-| Pons exposes `quoteBuy()` / `quoteSell()` | **They do not exist.** Confirmed absent from deployed bytecode. STUNKS computes quotes itself and confirms by simulation. |
-| Trade events are `Buy` / `Sell` | They are `CurveBuy` / `CurveSell`, emitted per-launch by each curve. |
-| Graduation triggers on a quote-side threshold | The trigger is token-side: `sellableTokens() == 0`. |
-| Anti-snipe behaviour is documented | An anti-snipe tax of up to **99%** exists on deployed curves and appears **nowhere** in Pons's published source. |
+| Assumption                                    | Reality                                                                                                                   |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Pons exposes `quoteBuy()` / `quoteSell()`     | **They do not exist.** Confirmed absent from deployed bytecode. STUNKS computes quotes itself and confirms by simulation. |
+| Trade events are `Buy` / `Sell`               | They are `CurveBuy` / `CurveSell`, emitted per-launch by each curve.                                                      |
+| Graduation triggers on a quote-side threshold | The trigger is token-side: `sellableTokens() == 0`.                                                                       |
+| Anti-snipe behaviour is documented            | An anti-snipe tax of up to **99%** exists on deployed curves and appears **nowhere** in Pons's published source.          |
 
 And the finding that drives everything else:
 
-> **Pons's published GitHub source does not match its deployment.**
-> `PonsV2LaunchFactory.sol` calls `exemptFromSnipeTax` on the curve, while
+> **Pons's published GitHub source does not match its deployment.** > `PonsV2LaunchFactory.sol` calls `exemptFromSnipeTax` on the curve, while
 > `PonsV2BondingCurve.sol` in the same commit does not define it — that source set
 > cannot compile. `snipeTaxSeconds` also reads `3` on-chain versus `15` in source.
 
@@ -50,14 +55,19 @@ pnpm install
 cp .env.example .env          # fill in DATABASE_URL when you have one
 pnpm prisma:generate
 
-pnpm typecheck                # all 7 workspaces
+pnpm typecheck                # all 8 workspaces
 pnpm lint
-pnpm test                     # 128 tests, hermetic (no network)
+pnpm test                     # 333 tests, hermetic (no network)
 pnpm build
 
-pnpm verify:pons              # 35 live checks against mainnet
-pnpm --filter @stunks/web dev # proof-of-read page on :3000
+pnpm verify:pons              # live checks against mainnet
+pnpm --filter @stunks/web dev # the app on :3000
+pnpm --filter @stunks/indexer dev
 ```
+
+CI runs typecheck, lint, tests, formatting, the Prisma schema check and the build
+on every push and pull request, plus a weekly `pnpm audit --prod` so an advisory
+published after a green merge still surfaces.
 
 Live read-only integration tests are opt-in so `pnpm test` never depends on the
 network:
@@ -72,7 +82,8 @@ RUN_LIVE_TESTS=1 pnpm test:integration
 
 ```text
 apps/
-  web/               Next.js 15 — Phase 1 proof-of-read page only
+  web/               Next.js 15 — landing, explore, token page, launch, trading
+  indexer/           two-stream log indexer (factory + curves) with reorg handling
 packages/
   config/            chain 4663, env validation, THE only hardcoded addresses
   types/             domain types (GraduationPhase, TradingVenue, quotes)
@@ -82,10 +93,21 @@ packages/
   database/          Prisma client + the bigint <-> Decimal crossing
 prisma/schema.prisma
 scripts/verify-pons.ts
+deploy/              Caddyfile, systemd units, Caddy image with rate limiting
 docs/
 ```
 
-Planned but not yet built: `apps/api` (Fastify), `apps/indexer`, `packages/ui`.
+The web app reads Postgres directly from server components. A separate
+`apps/api` becomes worthwhile when something other than this app consumes the
+data; until then it would only add a serialisation hop. `packages/ui` likewise
+does not exist, because there is one consumer of the components.
+
+Nine of the fifteen tables in `prisma/schema.prisma` are not yet written by
+anything — `token_transfers`, `pools`, `volume_snapshots`, `candles`,
+`fee_events`, the three competition tables and `admin_audit_log`. The schema was
+designed for the whole product; the indexer has reached tokens and trades. Two
+consequences are visible in the UI today: there are no candles, so no chart, and
+no transfer stream, so holder counts read "not indexed yet" rather than a number.
 
 ---
 
@@ -93,8 +115,8 @@ Planned but not yet built: `apps/api` (Fastify), `apps/indexer`, `packages/ui`.
 
 **1. Money is an integer, end to end.** Every amount, price, reserve and fee is a
 `bigint` at base-unit precision, stored as `NUMERIC(78, 0)`. This is not
-stylistic: the verified quote math reproduces on-chain results *exactly to the
-wei*, and one float conversion destroys that. A lint rule bans
+stylistic: the verified quote math reproduces on-chain results _exactly to the
+wei_, and one float conversion destroys that. A lint rule bans
 `Number()`/`parseFloat()`/`parseInt()`, and exemptions require a written reason.
 
 **2. Addresses live in exactly one place.** Only the Pons factory address is
@@ -118,8 +140,8 @@ says so.
 
 **STUNKS earns nothing from Pons trading fees.** The live fee policy splits
 protocol 30% / buyback 50% / creator 20%, and no parameter routes value to a
-third-party interface. `platformRevenue()` returns `0n` and that is a *verified
-answer*, not a placeholder. Any revenue model needs a separate mechanism.
+third-party interface. `platformRevenue()` returns `0n` and that is a _verified
+answer_, not a placeholder. Any revenue model needs a separate mechanism.
 
 **`Swept` is a tradeable-looking state with no venue.** A token can sit with its
 curve drained and its Uniswap V4 pool not yet created, because Pons deliberately
@@ -137,22 +159,80 @@ parameters, launch configs, the fee policy, deployed bytecode selectors (includi
 that the quote functions are still absent), approved pair-token economics, and
 that local quote math still equals `eth_call` at current reserves.
 
-Immutable facts that change are reported as **FAIL**. Owner-mutable parameters
-that change are reported as **INFO**, because that is drift to document, not a bug.
+Three outcomes, and the third one matters:
 
-Current: **35 checks, 0 failed.**
+| Outcome  | Meaning                                                         | Exit |
+| -------- | --------------------------------------------------------------- | ---- |
+| **FAIL** | a documented immutable fact is no longer true — stop-work       | 1    |
+| **INFO** | an owner-mutable parameter moved — drift to document, not a bug | 0    |
+| **????** | the endpoint could not answer — says nothing either way         | 2    |
+
+The third exists because the script used to abort the whole run on the first RPC
+error. When dRPC stopped serving archive state at the factory's deploy block, all
+eight sections stopped running — including the thirty-odd checks that only need
+current state — and nobody would have noticed a real drift behind that.
+
+Current, against a pruning public endpoint: **34 checks, 0 failed, 1 unverifiable.**
+The unverifiable one is the deploy-block existence check, which needs archive
+state. Run it against an archive endpoint for a fully clean result:
+
+```bash
+RPC_ENDPOINTS=<archive-capable endpoint> pnpm verify:pons
+```
+
+---
+
+## Operating the indexer
+
+Two streams run concurrently. The factory stream follows one address and keeps up
+with the head easily. The curve stream filters on event signature across every
+curve on the chain, and it is capped at the factory checkpoint so a trade always
+has a token to attach to.
+
+The curve stream is the one that falls behind, and how far behind it is determines
+how old every price, volume and market cap on the site is.
+
+```bash
+curl http://127.0.0.1:9464/health
+```
+
+That endpoint is unauthenticated and reports checkpoints, RPC URLs and failure
+counts, so it binds to loopback. `HEALTH_HOST` is what enforces that — a port
+number never restricted a binding — and it is overridden to `0.0.0.0` only inside
+the container, where the `127.0.0.1:9464:9464` mapping does the same job.
+
+**If the curve stream is falling behind**, the constraint is almost always the
+free public RPC endpoints, which both streams share. Measured on 2026-09-17: dRPC
+had 5,314 recorded failures and was marked unhealthy, OrdoFi 4,975, and the curve
+stream had made no progress for ten minutes with `eth_getLogs` failing at both.
+
+In order of effect:
+
+1. **Use HyperSync for the backfill.** `BACKFILL_SOURCE=hypersync` with a free
+   token from [app.envio.dev](https://app.envio.dev/api-tokens). RPC backfill of
+   36.8M blocks was measured at roughly 51 hours; HyperSync answers millions of
+   blocks per query.
+2. **Add a paid RPC endpoint** to `RPC_ENDPOINTS`. Two free endpoints is not
+   enough for a chain producing ~9.9 blocks per second.
+3. **Put the VPS in the same region as the database.** From a laptop in Asia to
+   Neon in us-east-2, one round trip is 306 ms, and a curve tick spent about 1.6 s
+   of its 12.2 s purely on the checkpoint write.
+
+Until the curve stream is current, the UI says so: the freshness banner reports
+the **slowest** stream, not the fastest, and names which one it is.
 
 ---
 
 ## Documentation
 
-| Document | Contents |
-| --- | --- |
-| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | layering, chain config, quoting strategy, indexing scale |
-| [`docs/PONS_V2_INTEGRATION.md`](docs/PONS_V2_INTEGRATION.md) | verified addresses, ABIs, events, exact math |
-| [`docs/WHITELIST_LAUNCH.md`](docs/WHITELIST_LAUNCH.md) | the Protected Launch differentiator |
-| [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) | phases 1–10 and Phase 1 scope |
-| [`docs/KNOWN_RISKS.md`](docs/KNOWN_RISKS.md) | risks and open unknowns |
+| Document                                                     | Contents                                                 |
+| ------------------------------------------------------------ | -------------------------------------------------------- |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)               | layering, chain config, quoting strategy, indexing scale |
+| [`docs/PONS_V2_INTEGRATION.md`](docs/PONS_V2_INTEGRATION.md) | verified addresses, ABIs, events, exact math             |
+| [`docs/WHITELIST_LAUNCH.md`](docs/WHITELIST_LAUNCH.md)       | the Protected Launch differentiator                      |
+| [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) | phases 1–10 and Phase 1 scope                            |
+| [`docs/KNOWN_RISKS.md`](docs/KNOWN_RISKS.md)                 | risks and open unknowns                                  |
+| [`docs/DEPLOY_VPS.md`](docs/DEPLOY_VPS.md)                   | single-VPS deployment, Docker and systemd                |
 
 ---
 

@@ -28,7 +28,12 @@ Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=NODE_ENV=production
 # Localhost only. The health endpoint reports checkpoints, RPC URLs and failure counts
 # with no authentication in front of it.
+#
+# HEALTH_HOST is what actually enforces that — a port number never restricted a binding.
+# It defaults to 127.0.0.1 in the indexer config; it is repeated here so that this file
+# states the whole story rather than implying the port does the work.
 Environment=HEALTH_PORT=9464
+Environment=HEALTH_HOST=127.0.0.1
 
 ExecStart=/usr/bin/env pnpm start
 

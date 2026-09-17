@@ -296,8 +296,7 @@ per-curve trade filters multiply it.
 **Impact:** Phase 3 cannot be built on public RPC.
 
 **Mitigation:** decide the data source before writing the indexer. Candidates:
-paid archive RPC with wide `getLogs` (Alchemy, Chainstack, dwellir all advertise
-4663) or Envio HyperSync, which documents Robinhood Chain support.
+paid archive RPC with wide `getLogs` (Alchemy, Chainstack, dwellir all advertise 4663) or Envio HyperSync, which documents Robinhood Chain support.
 
 **Unverified:** HyperSync coverage for 4663 has not been probed. Do that first.
 
@@ -476,22 +475,22 @@ manipulation, and moderation states from day one.
 
 ## Open unknowns
 
-| # | Question | Blocks | Verify by |
-| --- | --- | --- | --- |
-| U8 | Real bundle latency for STUNKS' own path: launch receipt → buy inclusion | whether Protected Launch delivers its advantage | small-value mainnet test launch with a real whitelist |
-| ~~U13~~ | ~~Whether a co-located indexer sustains >10 blocks/second~~ | CLOSED — moot. Batched writes reached ~100 blocks/second *without* co-location (R21). | — |
-| U10 | Where the collected snipe tax goes (protocol / creator / buyback / reserve) | fee analytics and honest mechanism copy | verified source, or trace a taxed buy's value flow |
-| U12 | Exact composition of deductions once they exceed 100% (age 0 of a launch) | nothing — quotes there come from simulation | verified source, or a controlled fresh launch |
+| #       | Question                                                                    | Blocks                                                                                | Verify by                                             |
+| ------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| U8      | Real bundle latency for STUNKS' own path: launch receipt → buy inclusion    | whether Protected Launch delivers its advantage                                       | small-value mainnet test launch with a real whitelist |
+| ~~U13~~ | ~~Whether a co-located indexer sustains >10 blocks/second~~                 | CLOSED — moot. Batched writes reached ~100 blocks/second _without_ co-location (R21). | —                                                     |
+| U10     | Where the collected snipe tax goes (protocol / creator / buyback / reserve) | fee analytics and honest mechanism copy                                               | verified source, or trace a taxed buy's value flow    |
+| U12     | Exact composition of deductions once they exceed 100% (age 0 of a launch)   | nothing — quotes there come from simulation                                           | verified source, or a controlled fresh launch         |
 
 **Resolved since first draft**
 
-| # | Was | Resolution |
-| --- | --- | --- |
-| U1 | Exact snipe-tax decay function | `startBps >> floor(elapsed*14/seconds)`, matching independent measurements; and `currentSnipeTaxBps(address)` exists on-chain, so it is read rather than computed |
-| U3 | Envio HyperSync coverage for 4663 | **Supported.** `/height` returns a value tracking the chain head (measured lag ~113 blocks). Queries need a free token from app.envio.dev. Implemented as a pluggable source; `pnpm probe:sources` re-checks it |
-| U9 | Approved pair-token list | `pairTokenEconomics(address)` and `approvedPairTokens(address)` verified present; five pairs re-read and matched exactly. USDG is 6 decimals |
-| U11 | The router's declarable-exemption limit | **31, verified first-hand.** `pnpm probe:exemptions` simulates `launchAndBuy` at 0/1/30/31/32/33 declared addresses: 31 succeeds, 32 reverts. Encoded as `MAX_DECLARABLE_SNIPE_EXEMPTIONS` with tests |
-| — | "Launch and buy cannot be atomic" | **Wrong.** `PonsV2LaunchAndBuy.launchAndBuy` (`0xf85f8e41`) is public and in active use; the creator's own buy is atomic and unfront-runnable |
+| #   | Was                                     | Resolution                                                                                                                                                                                                      |
+| --- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| U1  | Exact snipe-tax decay function          | `startBps >> floor(elapsed*14/seconds)`, matching independent measurements; and `currentSnipeTaxBps(address)` exists on-chain, so it is read rather than computed                                               |
+| U3  | Envio HyperSync coverage for 4663       | **Supported.** `/height` returns a value tracking the chain head (measured lag ~113 blocks). Queries need a free token from app.envio.dev. Implemented as a pluggable source; `pnpm probe:sources` re-checks it |
+| U9  | Approved pair-token list                | `pairTokenEconomics(address)` and `approvedPairTokens(address)` verified present; five pairs re-read and matched exactly. USDG is 6 decimals                                                                    |
+| U11 | The router's declarable-exemption limit | **31, verified first-hand.** `pnpm probe:exemptions` simulates `launchAndBuy` at 0/1/30/31/32/33 declared addresses: 31 succeeds, 32 reverts. Encoded as `MAX_DECLARABLE_SNIPE_EXEMPTIONS` with tests           |
+| —   | "Launch and buy cannot be atomic"       | **Wrong.** `PonsV2LaunchAndBuy.launchAndBuy` (`0xf85f8e41`) is public and in active use; the creator's own buy is atomic and unfront-runnable                                                                   |
 
 ---
 
@@ -524,7 +523,7 @@ No implementation will assume a value for any of these.
 
 The whitelist bundle sends one `curve.buy(amount, minOut, recipient)` per whitelisted
 wallet, sequentially, from a single funded payer. Sequential submission from one wallet
-gives sequential nonces, so ordering holds *within* that wallet — but the bundle is not
+gives sequential nonces, so ordering holds _within_ that wallet — but the bundle is not
 atomic with the launch and not atomic with itself. An outsider's transaction can
 interleave, and any individual buy can revert while its neighbours succeed.
 
@@ -534,7 +533,7 @@ in order, as fast as one wallet can submit".
 
 **Mitigations implemented:**
 
-- **Permutation-safe floors.** Every buy's `minOut` is priced as if every *other* buy
+- **Permutation-safe floors.** Every buy's `minOut` is priced as if every _other_ buy
   in the bundle landed first (`worstCaseFloors` in `packages/pons/src/trade/bundle.ts`).
   A floor priced on the planning-time reserve would make the first buy move the price
   and every later buy revert on its own slippage check — a bundle that half-executes and
@@ -563,7 +562,7 @@ Verified behaviour, and the single most dangerous property found in this protoco
 `buy` call carrying value to an address with **no code does not revert**. It succeeds as
 a plain value transfer to a codeless account. The ETH is not recoverable.
 
-This matters specifically because the curve address is deterministic and *could* be
+This matters specifically because the curve address is deterministic and _could_ be
 predicted before launching. Predicting it would shave a round trip off the bundle path,
 which is tempting when the whole feature is a race against a 3-second window.
 
@@ -636,12 +635,10 @@ blockchain is the source of truth; a partial history presented as complete would
 new, worse data error. A replay changes many database rows and consumes RPC/HyperSync
 capacity, so it requires explicit operator approval.
 
-
 ### Recovery outcome (development database, 2026-09-16)
 
 Neon point-in-time restore to `2026-09-15T21:30:00Z` (04:30 Asia/Pontianak) was
-verified before restoring with a historical query: **37,088** `trades` rows for chain
-4663. After restore, read-only integrity checks found zero orphaned trades.
+verified before restoring with a historical query: **37,088** `trades` rows for chain 4663. After restore, read-only integrity checks found zero orphaned trades.
 
 The historical snapshot had 1,217 trades whose block number was ahead of the curve
 checkpoint — a normal snapshot race, where idempotent rows were written just before the
@@ -652,3 +649,142 @@ checkpoint. No trade was duplicated.
 Seven old failed-block rows were all below checkpoints that had already advanced. The
 scanner now resolves failed rows through every successful checkpoint, so the health
 endpoint returned `ok` with zero unresolved failures after the replay.
+
+---
+
+## R28 — RESOLVED — Freshness was reported from the wrong stream
+
+**What it claimed vs what was true (2026-09-17).** The staleness banner on the landing
+and explore pages read the **factory** stream's checkpoint. Every price, market cap,
+volume figure and trade count on those pages comes from the **curve** stream.
+
+| Stream  | Behind head    | In time    |
+| ------- | -------------- | ---------- |
+| factory | 361 blocks     | 37 seconds |
+| curves  | 715,288 blocks | ~20 hours  |
+
+So the page reported "37 seconds behind" over figures that were a day old.
+
+**Why it was structural, not a typo.** The curve stream is _capped_ at the factory
+checkpoint by design, so it can only ever be equal or behind. Picking the factory stream
+was therefore guaranteed to report the optimistic number, permanently, and the gap grows
+with the backlog rather than shrinking.
+
+This is a direct violation of invariant 4. The invariant is not only about fabricated
+values — a real number presented as fresher than it is misleads in the same way.
+
+**Fix.** `apps/web/src/lib/staleness.ts` is a pure module whose rule is that freshness is
+the **slowest** required stream. Both streams are reported individually so the banner can
+name where the backlog is, a paused stream counts as stale regardless of its block
+number, and a missing stream reports "unknown" rather than "current". Nine tests pin it,
+including the exact 2026-09-17 numbers above. Moving the rule out of the database module
+is what made testing it possible at all.
+
+---
+
+## R29 — RESOLVED — Reorg rollback deleted across streams but rewound only one
+
+**The coupling.** `handleReorg` deleted `trades` and `tokens` at **chain** scope, then
+rolled back only the checkpoint of the stream that detected the divergence.
+
+Because the curve stream trails the factory — 715,288 blocks on 2026-09-17 — a rollback
+there would delete every token the factory had already indexed above the rollback point,
+while the factory checkpoint stayed put and therefore **never re-scanned them**. Those
+launches would be gone permanently, and their later trades would fail to resolve and be
+counted as `unmatched`.
+
+The trigger does not require a real reorg. `handleReorg` fires on a hash mismatch, and
+the pool routes consecutive `blockHash` reads to whichever endpoint is currently ranked
+first — so one endpoint answering with a different hash is enough.
+
+**Fix.** Each stream now deletes only the rows it writes, through a `deleteAbove`
+callback: the factory owns tokens (trades follow via `onDelete: Cascade`), the curve
+stream owns trades and must never touch tokens. A `cascadeStreams` list then pulls back
+any stream the deletion left standing above the rollback point, via
+`rollbackIfAhead` — which is a no-op for a stream already below it, so a stream far
+behind the divergence is never dragged backwards for nothing. Seven tests cover the
+ordering, the cascade, and both non-rollback cases.
+
+---
+
+## R30 — RESOLVED — The verification harness aborted on the first RPC error
+
+`pnpm verify:pons` ran its eight sections as a plain sequence of awaits. On 2026-09-17 it
+did not complete against either public endpoint:
+
+- dRPC rejected `eth_getCode` at the factory's deploy block — "Unknown state. First
+  available state is 1" — aborting at section 2 of 8.
+- OrdoFi could not return the head block it had itself just reported, aborting at
+  section 1.
+
+So roughly thirty checks that need only current state did not run, and the README's
+"35 checks, 0 failed" was no longer reproducible. A harness that stops at the first
+endpoint quirk cannot detect the drift it exists to detect.
+
+**Fix.** Sections are wrapped so one failure is contained, and a check that cannot be run
+reports a third outcome — neither PASS nor FAIL. Exit code 2 distinguishes "could not
+fully verify" from "a documented fact changed" (1). Against a pruning endpoint the run is
+now **34 checks, 0 failed, 1 unverifiable**, the unverifiable one being the archive-state
+deploy-block check.
+
+---
+
+## R31 — RESOLVED — The health endpoint listened on every interface
+
+`startHealthServer` called `server.listen(port)` with no host, which binds `0.0.0.0`.
+Confirmed on a running instance: `TCP *:9490 (LISTEN)`.
+
+Both the compose file and the systemd unit carried a comment saying the endpoint was
+localhost-only. Compose was right by accident — the `127.0.0.1:9464:9464` mapping did
+it — but the systemd path has no such mapping and only set `HEALTH_PORT`. A port number
+never restricted a binding. On that path the endpoint, which reports checkpoints, RPC
+endpoint URLs and failure counts with no authentication, was reachable on the VPS's
+public IP.
+
+**Fix.** The server binds `127.0.0.1` by default, overridable through `HEALTH_HOST` for
+the one legitimate case — inside a container, where loopback is unreachable from the host
+and the port mapping provides the same isolation. The indexer logs a warning when it is
+bound beyond loopback.
+
+---
+
+## R32 — RESOLVED — Four critical RCE advisories sat in the lockfile
+
+`next@15.1.3` carried four critical advisories, including unauthenticated remote code
+execution in Image Optimization and in the React flight protocol, plus a middleware
+authorization bypass. Both surfaces were live: `next/image` is used on the landing page
+and `sharp` was installed.
+
+For a wallet dApp this is the worst class of bug available. Server-side code execution in
+the app that renders the trading UI lets an attacker change the `to`, `data` and `value`
+a user is asked to sign, and the wallet will present whatever it is handed.
+
+**Fix.** `next` to 15.5.25, plus `pnpm.overrides` for `postcss` (>=8.5.18) and `ws`
+(>=8.21.0), which are transitive and could not be reached by the bump. Production
+advisories went from 49 (4 critical, 16 high) to 7 (0 critical, 0 high). The remainder
+all arrive through wagmi's WalletConnect and MetaMask connector chain, which this app
+does not configure — it registers `injected` only.
+
+**Why it went unnoticed:** nothing ran `pnpm audit`. CI now runs it weekly and fails on
+high or above, so an advisory published after a green merge still surfaces.
+
+---
+
+## R33 — RESOLVED — The invariants were enforced only by memory
+
+There was no CI. The lint rules that ban `Number()`/`parseFloat()` in money paths and
+address literals outside `@stunks/config`, and the tests pinning the curve maths and the
+venue resolver, all ran only when someone remembered locally.
+
+Two consequences were already in the tree:
+
+- `apps/web` had no `test` script, so `turbo run test` skipped it entirely and
+  `src/app/launch/launch-plan.test.ts` — which checks the launch funding arithmetic,
+  money — had never executed in any run of `pnpm test`.
+- `pnpm format:check` failed on 39 files and `prisma format` produced a 31-line diff,
+  so neither check could have been trusted as a signal.
+
+**Fix.** `.github/workflows/ci.yml` runs typecheck, lint, tests, formatting, the Prisma
+schema check and the build on every push and pull request, with a weekly dependency
+audit. `apps/web` has a `test` script and a vitest config; the repository is formatted.
+Test count went from 314 across 6 workspaces to 333 across 7.

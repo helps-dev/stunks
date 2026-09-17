@@ -1,11 +1,11 @@
-import {
-  encodeFunctionData,
-  type Address,
-  type Hex,
-  type PublicClient,
-} from "viem";
+import { encodeFunctionData, type Address, type Hex, type PublicClient } from "viem";
 import { applySlippageFloor, formatBps } from "@stunks/utils";
-import { GraduationPhase, type CurveState, type Quote, type TradeSide } from "@stunks/types";
+import {
+  GraduationPhase,
+  type CurveState,
+  type Quote,
+  type TradeSide,
+} from "@stunks/types";
 import { ponsV2CurveAbi } from "../abi/curve.js";
 import { erc20Abi } from "../abi/index.js";
 import { quoteBuy, quoteSell } from "../curve/quote.js";
@@ -96,7 +96,11 @@ export async function prepareTrade(args: PrepareTradeArgs): Promise<PrepareTrade
   const recipient = args.recipient ?? account;
 
   if (amountIn <= 0n) {
-    return { ok: false, code: "ZERO_AMOUNT", message: "Enter an amount greater than zero." };
+    return {
+      ok: false,
+      code: "ZERO_AMOUNT",
+      message: "Enter an amount greater than zero.",
+    };
   }
   if (
     !Number.isInteger(slippageBps) ||

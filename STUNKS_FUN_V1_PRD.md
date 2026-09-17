@@ -668,10 +668,10 @@ Dengan alasan yang sebisa mungkin readable.
 
 Tabel:
 
-| Time | Trader | Type | Amount | Price |
-|---|---|---|---:|---:|
-| 10s | 0x82...91 | BUY | $500 | $0.001 |
-| 20s | 0x12...AB | SELL | $120 | $0.0009 |
+| Time | Trader    | Type | Amount |   Price |
+| ---- | --------- | ---- | -----: | ------: |
+| 10s  | 0x82...91 | BUY  |   $500 |  $0.001 |
+| 20s  | 0x12...AB | SELL |   $120 | $0.0009 |
 
 BUY dan SELL harus dibedakan secara visual.
 

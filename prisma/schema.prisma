@@ -41,9 +41,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider  = "postgresql"
   // Pooled connection for the application. On Neon this is the "-pooler" host.
-  url      = env("DATABASE_URL")
+  url       = env("DATABASE_URL")
   // Direct connection for migrations. DDL through a connection pooler is
   // unreliable, so Prisma is pointed at the unpooled host for schema changes.
   directUrl = env("DIRECT_URL")
@@ -92,7 +92,7 @@ model Token {
   // ── on-chain canonical: metadata set at launch ──
   name        String
   symbol      String
-  decimals    Int    @default(18)
+  decimals    Int     @default(18)
   imageUrl    String?
   description String?
 
@@ -103,14 +103,14 @@ model Token {
   farcasterUrl String?
 
   // ── on-chain canonical: the launch record ──
-  creatorAddress      String
-  deployerAddress     String
-  curveAddress        String
+  creatorAddress    String
+  deployerAddress   String
+  curveAddress      String
   /// Quote asset. Zero address means native ETH. May be a tokenized stock, and
   /// decimals vary — USDG uses 6, not 18.
-  pairTokenAddress    String
-  pairTokenDecimals   Int    @default(18)
-  launchConfigId      BigInt
+  pairTokenAddress  String
+  pairTokenDecimals Int    @default(18)
+  launchConfigId    BigInt
 
   totalSupply         Decimal @db.Decimal(78, 0)
   creatorTaxBps       Int
@@ -162,12 +162,12 @@ model Token {
   hadWhitelistBundle Boolean @default(false)
   whitelistSize      Int     @default(0)
 
-  launchBlock     BigInt
-  launchTxHash    String
-  firstTradeAt    DateTime?
-  lastTradeAt     DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  launchBlock  BigInt
+  launchTxHash String
+  firstTradeAt DateTime?
+  lastTradeAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   creator   Creator @relation(fields: [creatorId], references: [id])
   creatorId String
@@ -217,7 +217,7 @@ model Trade {
   venue        TradeVenue @default(CURVE)
 
   /// Who sent the transaction.
-  traderAddress String
+  traderAddress    String
   /// Who received the tokens. Distinct from trader on purpose: the anti-snipe tax
   /// is evaluated per recipient, and bundle buys have one payer and many recipients.
   recipientAddress String
@@ -316,9 +316,9 @@ model Creator {
   chainId Int
   address String
 
-  tokenCount       Int     @default(0)
-  graduatedCount   Int     @default(0)
-  totalVolume      Decimal @default(0) @db.Decimal(78, 0)
+  tokenCount     Int     @default(0)
+  graduatedCount Int     @default(0)
+  totalVolume    Decimal @default(0) @db.Decimal(78, 0)
 
   /// Fees credited to this creator, from indexed FeesSwept events only.
   /// Not shown as claimable until the fee-escrow surface is verified.
@@ -355,9 +355,9 @@ model Pool {
   tickSpacing Int
 
   /// Locked V4 position NFT. There is no withdrawal path on the locker.
-  positionId    Decimal? @db.Decimal(78, 0)
-  lockedTokens  Decimal? @db.Decimal(78, 0)
-  seededQuote   Decimal? @db.Decimal(78, 0)
+  positionId   Decimal? @db.Decimal(78, 0)
+  lockedTokens Decimal? @db.Decimal(78, 0)
+  seededQuote  Decimal? @db.Decimal(78, 0)
 
   graduatedAt      DateTime
   graduationTxHash String
@@ -407,8 +407,8 @@ model Candle {
   tokenId String
 
   /// Interval in seconds: 60, 300, 900, 3600, 14400, 86400.
-  interval  Int
-  openTime  DateTime
+  interval Int
+  openTime DateTime
 
   open  Decimal @db.Decimal(78, 0)
   high  Decimal @db.Decimal(78, 0)
@@ -470,7 +470,7 @@ model IndexerState {
   lastProcessedBlock     BigInt
   lastProcessedBlockHash String?
   /// Confirmation depth applied before a block is treated as final.
-  confirmationDepth      Int    @default(12)
+  confirmationDepth      Int     @default(12)
 
   /// Adaptive eth_getLogs window. Endpoints disagree about their real limits and
   /// report them misleadingly, so the working value is learned and persisted.
@@ -496,8 +496,8 @@ model FailedBlock {
   stream      String
   blockNumber BigInt
 
-  attempts    Int      @default(1)
-  lastError   String
+  attempts      Int      @default(1)
+  lastError     String
   firstFailedAt DateTime @default(now())
   lastFailedAt  DateTime @updatedAt
   resolved      Boolean  @default(false)
@@ -524,13 +524,13 @@ model Competition {
 
   /// Configurable anti-abuse rules. Stored rather than hardcoded so a competition
   /// can be tightened without a deploy.
-  minTradeSize        Decimal @default(0) @db.Decimal(78, 0)
-  minTradeCount       Int     @default(1)
+  minTradeSize          Decimal  @default(0) @db.Decimal(78, 0)
+  minTradeCount         Int      @default(1)
   maxWalletContribution Decimal? @db.Decimal(78, 0)
-  excludedAddresses   String[] @default([])
+  excludedAddresses     String[] @default([])
   /// Exclude wallets that were on a launch's snipe-tax whitelist, so a bundle
   /// cannot farm the leaderboard.
-  excludeBundleWallets Boolean @default(true)
+  excludeBundleWallets  Boolean  @default(true)
 
   prizePoolDescription String?
   isActive             Boolean @default(true)

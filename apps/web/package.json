@@ -4,10 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate --schema ../../prisma/schema.prisma && next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "test": "vitest run"
   },
   "dependencies": {
     "@stunks/config": "workspace:*",
@@ -17,7 +18,7 @@
     "@stunks/utils": "workspace:*",
     "@stunks/web3": "workspace:*",
     "@tanstack/react-query": "5.62.11",
-    "next": "15.1.3",
+    "next": "15.5.25",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "viem": "2.21.55",
@@ -27,6 +28,7 @@
     "@types/node": "22.10.2",
     "@types/react": "19.0.2",
     "@types/react-dom": "19.0.2",
-    "typescript": "5.7.2"
+    "typescript": "5.7.2",
+    "vitest": "2.1.8"
   }
 }

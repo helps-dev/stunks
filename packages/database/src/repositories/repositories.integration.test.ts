@@ -225,19 +225,17 @@ describeDb("ExploreRepository pair candidates", () => {
   it("groups pair assets observed in real launches without calling them approved", async () => {
     const stockPair = "0x1111111111111111111111111111111111111111";
     await repos.tokens.recordLaunch(launchInput("pair-native"));
-    await repos.tokens.recordLaunch(
-      launchInput("pair-stock-a"),
-    );
-    await repos.tokens.recordLaunch(
-      launchInput("pair-stock-b"),
-    );
+    await repos.tokens.recordLaunch(launchInput("pair-stock-a"));
+    await repos.tokens.recordLaunch(launchInput("pair-stock-b"));
 
     // These test launches reuse the same ERC-20 candidate. Discovery may count it,
     // but the web route still must call factory.approvedPairTokens() before showing it.
     await prisma.token.updateMany({
       where: {
         chainId: CHAIN_ID,
-        address: { in: [launchInput("pair-stock-a").address, launchInput("pair-stock-b").address] },
+        address: {
+          in: [launchInput("pair-stock-a").address, launchInput("pair-stock-b").address],
+        },
       },
       data: { pairTokenAddress: stockPair, pairTokenDecimals: 6 },
     });
@@ -481,14 +479,16 @@ describeDb("failed block tracking", () => {
       error: "future failure",
     });
 
-    await expect(repos.checkpoints.resolveFailedBlocksThrough(CHAIN_ID, STREAM, 50n)).resolves.toBe(
-      1,
-    );
+    await expect(
+      repos.checkpoints.resolveFailedBlocksThrough(CHAIN_ID, STREAM, 50n),
+    ).resolves.toBe(1);
 
     const failures = await repos.checkpoints.listUnresolvedFailures(CHAIN_ID);
-    expect(failures.filter((failure) => failure.stream === STREAM).map((failure) => failure.blockNumber)).toEqual([
-      51n,
-    ]);
+    expect(
+      failures
+        .filter((failure) => failure.stream === STREAM)
+        .map((failure) => failure.blockNumber),
+    ).toEqual([51n]);
   });
 
   it("surfaces unresolved failures in the health snapshot", async () => {

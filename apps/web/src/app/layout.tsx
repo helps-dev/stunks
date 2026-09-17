@@ -33,7 +33,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <div className="site-footer-links">
                 <a href="/explore">Explore</a>
                 <a href="/launch">Launch</a>
-                <a href="https://robinhoodchain.blockscout.com" target="_blank" rel="noreferrer">
+                <a
+                  href="https://robinhoodchain.blockscout.com"
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   Explorer ↗
                 </a>
               </div>

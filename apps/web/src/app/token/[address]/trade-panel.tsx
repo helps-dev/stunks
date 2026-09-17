@@ -281,7 +281,9 @@ export function TradePanel(props: TradePanelProps) {
 
       <div className="field">
         <label htmlFor="trade-amount">
-          {side === "BUY" ? `Amount to spend (${quoteSymbol})` : `Amount to sell (${symbol})`}
+          {side === "BUY"
+            ? `Amount to spend (${quoteSymbol})`
+            : `Amount to sell (${symbol})`}
         </label>
         <input
           id="trade-amount"
@@ -366,7 +368,8 @@ export function TradePanel(props: TradePanelProps) {
               <tr>
                 <th scope="row">Curve fee</th>
                 <td className="value">
-                  {formatUnitsExact(prepared.quote.feeAmount, quoteDecimals)} {quoteSymbol}
+                  {formatUnitsExact(prepared.quote.feeAmount, quoteDecimals)}{" "}
+                  {quoteSymbol}
                 </td>
               </tr>
               <tr>
@@ -430,8 +433,7 @@ export function TradePanel(props: TradePanelProps) {
       {phase === "Confirmed" && (
         <div className="panel pad" style={{ marginTop: 12 }}>
           <p style={{ margin: 0 }}>
-            Trade confirmed.{" "}
-            {txHash && <span className="mono hint">{txHash}</span>}
+            Trade confirmed. {txHash && <span className="mono hint">{txHash}</span>}
           </p>
           <p className="hint" style={{ marginBottom: 0 }}>
             Your balance is already updated on-chain. This page&apos;s history and

@@ -97,8 +97,14 @@ describe("planBundle — validation", () => {
 
   it("treats a differently-cased duplicate as the same wallet", () => {
     const list = [
-      { address: "0xAbCdEf0000000000000000000000000000000001" as Address, amountIn: TENTH_ETH },
-      { address: "0xabcdef0000000000000000000000000000000001" as Address, amountIn: TENTH_ETH },
+      {
+        address: "0xAbCdEf0000000000000000000000000000000001" as Address,
+        amountIn: TENTH_ETH,
+      },
+      {
+        address: "0xabcdef0000000000000000000000000000000001" as Address,
+        amountIn: TENTH_ETH,
+      },
     ];
     const result = planBundle(args(list));
     expect(result.ok).toBe(false);
@@ -123,7 +129,10 @@ describe("planBundle — validation", () => {
 
   it("matches the exemption list case-insensitively", () => {
     const list = [
-      { address: "0xAbCdEf0000000000000000000000000000000001" as Address, amountIn: TENTH_ETH },
+      {
+        address: "0xAbCdEf0000000000000000000000000000000001" as Address,
+        amountIn: TENTH_ETH,
+      },
     ];
     const result = planBundle(
       args(list, {
@@ -220,7 +229,9 @@ describe("planBundle — totals and warnings", () => {
     if (!result.ok) return;
 
     expect(result.plan.totalIn).toBe(40_000_000_000_000_000n);
-    expect(result.plan.buys.map((buy) => buy.amountIn)).toEqual(list.map((row) => row.amountIn));
+    expect(result.plan.buys.map((buy) => buy.amountIn)).toEqual(
+      list.map((row) => row.amountIn),
+    );
 
     const transactions = buildBundleTransactions(result.plan, {
       curve: CURVE,

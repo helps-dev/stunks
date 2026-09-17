@@ -96,7 +96,9 @@ export function LaunchForm(props: LaunchFormProps) {
   const [description, setDescription] = useState("");
   const [creatorTaxPercent, setCreatorTaxPercent] = useState("2");
   const [devBuyAmount, setDevBuyAmount] = useState("0.01");
-  const [walletRows, setWalletRows] = useState<WalletBuyRow[]>([createWalletRow(0, "0.01")]);
+  const [walletRows, setWalletRows] = useState<WalletBuyRow[]>([
+    createWalletRow(0, "0.01"),
+  ]);
   const [nextWalletRowId, setNextWalletRowId] = useState(1);
   const [bundleEnabled, setBundleEnabled] = useState(false);
   const [tx, setTx] = useState<TxState>({ phase: "Idle" });
@@ -144,10 +146,14 @@ export function LaunchForm(props: LaunchFormProps) {
   const bundleRecipients = useMemo<readonly BundleRecipient[]>(
     () =>
       parsedWalletRows
-        .filter((row): row is ParsedWalletBuyRow & { amountIn: bigint } =>
-          row.amountIn !== null && row.amountIn > 0n,
+        .filter(
+          (row): row is ParsedWalletBuyRow & { amountIn: bigint } =>
+            row.amountIn !== null && row.amountIn > 0n,
         )
-        .map((row) => ({ address: row.address.trim() as Address, amountIn: row.amountIn })),
+        .map((row) => ({
+          address: row.address.trim() as Address,
+          amountIn: row.amountIn,
+        })),
     [parsedWalletRows],
   );
 
@@ -163,7 +169,9 @@ export function LaunchForm(props: LaunchFormProps) {
 
   const isNativePair = selectedPair?.native === true;
   const shouldSendProtectedBuys =
-    bundleEnabled && supportsProtectedBuySequence(isNativePair) && bundleRecipients.length > 0;
+    bundleEnabled &&
+    supportsProtectedBuySequence(isNativePair) &&
+    bundleRecipients.length > 0;
   const nativePrincipalBeforeGas = useMemo(
     () =>
       nativePrincipalRequired({
@@ -180,8 +188,13 @@ export function LaunchForm(props: LaunchFormProps) {
     tx.phase === "Pending" ||
     bundle.running;
 
-  function updateWalletRow(id: string, patch: Partial<Pick<WalletBuyRow, "address" | "amount">>) {
-    setWalletRows((rows) => rows.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+  function updateWalletRow(
+    id: string,
+    patch: Partial<Pick<WalletBuyRow, "address" | "amount">>,
+  ) {
+    setWalletRows((rows) =>
+      rows.map((row) => (row.id === id ? { ...row, ...patch } : row)),
+    );
   }
 
   function addWalletRow() {
@@ -313,7 +326,8 @@ export function LaunchForm(props: LaunchFormProps) {
         note: `Requesting ${executable.transactions.length} wallet confirmations for protected buys…`,
       });
 
-      const hashes: { recipient: Address; hash: `0x${string}` | null; error?: string }[] = [];
+      const hashes: { recipient: Address; hash: `0x${string}` | null; error?: string }[] =
+        [];
       for (const transaction of executable.transactions) {
         try {
           const bundleHash = await walletClient.sendTransaction({
@@ -410,7 +424,8 @@ export function LaunchForm(props: LaunchFormProps) {
         if (!Number.isInteger(liveDecimals) || liveDecimals < 0 || liveDecimals > 255) {
           setTx({
             phase: "Failed",
-            message: "The selected ERC-20 returned an invalid decimal scale. Launching is blocked.",
+            message:
+              "The selected ERC-20 returned an invalid decimal scale. Launching is blocked.",
             errorCode: "REVERTED",
           });
           return;
@@ -510,7 +525,11 @@ export function LaunchForm(props: LaunchFormProps) {
 
       const initial = await build();
       if (!initial.ok) {
-        setTx({ phase: "Failed", message: initial.errors.join(" "), errorCode: "REVERTED" });
+        setTx({
+          phase: "Failed",
+          message: initial.errors.join(" "),
+          errorCode: "REVERTED",
+        });
         return;
       }
       let launch = initial.launch;
@@ -537,7 +556,11 @@ export function LaunchForm(props: LaunchFormProps) {
             functionName: "approve",
             args: [props.router, signingDevBuy],
           });
-          setTx({ phase: "Pending", hash: approvalHash, message: "Waiting for approval…" });
+          setTx({
+            phase: "Pending",
+            hash: approvalHash,
+            message: "Waiting for approval…",
+          });
           const approvalReceipt = await publicClient.waitForTransactionReceipt({
             hash: approvalHash,
             pollingInterval: 100,
@@ -619,7 +642,8 @@ export function LaunchForm(props: LaunchFormProps) {
         phase: "Confirmed",
         hash,
         blockNumber: receipt.blockNumber,
-        message: "Launched on-chain. It will appear in STUNKS once the indexer reaches this block.",
+        message:
+          "Launched on-chain. It will appear in STUNKS once the indexer reaches this block.",
       });
 
       if (shouldSendProtectedBuys) {
@@ -641,8 +665,8 @@ export function LaunchForm(props: LaunchFormProps) {
     return (
       <div className="error">
         <p style={{ color: "var(--text)", margin: 0 }}>
-          No current Pons pair asset is available. Launching is disabled rather than guessing
-          a token address.
+          No current Pons pair asset is available. Launching is disabled rather than
+          guessing a token address.
         </p>
       </div>
     );
@@ -655,7 +679,11 @@ export function LaunchForm(props: LaunchFormProps) {
         <div className="launch-field-grid">
           <label className="field">
             <span>Name</span>
-            <input value={name} onChange={(event) => setName(event.target.value)} maxLength={64} />
+            <input
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              maxLength={64}
+            />
           </label>
           <label className="field">
             <span>Symbol</span>
@@ -673,7 +701,9 @@ export function LaunchForm(props: LaunchFormProps) {
             onChange={(event) => setLogo(event.target.value)}
             placeholder="ipfs://…"
           />
-          <small>Prefer ipfs:// so your on-chain metadata does not depend on one gateway.</small>
+          <small>
+            Prefer ipfs:// so your on-chain metadata does not depend on one gateway.
+          </small>
         </label>
         <label className="field">
           <span>Description</span>
@@ -698,12 +728,14 @@ export function LaunchForm(props: LaunchFormProps) {
             >
               {props.pairAssets.map((pair) => (
                 <option key={pair.address} value={pair.address}>
-                  {pair.symbol} — {pair.name}{pair.native ? " (native)" : ""}
+                  {pair.symbol} — {pair.name}
+                  {pair.native ? " (native)" : ""}
                 </option>
               ))}
             </select>
             <small>
-              ERC-20 options are re-checked against factory approval when this page loads. ETH follows Pons&apos;s native pair path.
+              ERC-20 options are re-checked against factory approval when this page loads.
+              ETH follows Pons&apos;s native pair path.
             </small>
           </label>
           <label className="field">
@@ -747,21 +779,28 @@ export function LaunchForm(props: LaunchFormProps) {
             disabled={busy}
           />
           <small>
-            Paid to your creator address on each trade. Current Pons ceiling: {props.maxCreatorTaxBps / 100}%.
+            Paid to your creator address on each trade. Current Pons ceiling:{" "}
+            {props.maxCreatorTaxBps / 100}%.
           </small>
         </label>
         <p className="hint">
-          Native launch fee: <span className="mono">{formatUnitsExact(BigInt(props.launchFee), 18)} ETH</span>.{" "}
-          STUNKS adds 0 fee.
+          Native launch fee:{" "}
+          <span className="mono">
+            {formatUnitsExact(BigInt(props.launchFee), 18)} ETH
+          </span>
+          . STUNKS adds 0 fee.
         </p>
         {isNativePair && (
           <div className="native-funding-card">
             <span>Required ETH before gas</span>
-            <strong className="mono">{formatUnitsExact(nativePrincipalBeforeGas, 18)} ETH</strong>
+            <strong className="mono">
+              {formatUnitsExact(nativePrincipalBeforeGas, 18)} ETH
+            </strong>
             <small>
-              Launch fee {formatUnitsExact(BigInt(props.launchFee), 18)} ETH + developer buy{" "}
-              {formatUnitsExact(parsedDevBuy ?? 0n, 18)} ETH + protected buy requests{" "}
-              {formatUnitsExact(shouldSendProtectedBuys ? bundleTotal : 0n, 18)} ETH. Network gas is additional.
+              Launch fee {formatUnitsExact(BigInt(props.launchFee), 18)} ETH + developer
+              buy {formatUnitsExact(parsedDevBuy ?? 0n, 18)} ETH + protected buy requests{" "}
+              {formatUnitsExact(shouldSendProtectedBuys ? bundleTotal : 0n, 18)} ETH.
+              Network gas is additional.
             </small>
           </div>
         )}
@@ -773,10 +812,13 @@ export function LaunchForm(props: LaunchFormProps) {
             <h2>Protected wallets</h2>
             <p className="hint">
               Add one recipient per row. A wallet in this list is exempt from the launch
-              anti-snipe tax; its amount is used only when protected buy requests are queued.
+              anti-snipe tax; its amount is used only when protected buy requests are
+              queued.
             </p>
           </div>
-          <span className="badge">{exemptions?.slotsUsed ?? 0} / {MAX_DECLARABLE_SNIPE_EXEMPTIONS}</span>
+          <span className="badge">
+            {exemptions?.slotsUsed ?? 0} / {MAX_DECLARABLE_SNIPE_EXEMPTIONS}
+          </span>
         </div>
 
         <label className="bundle-toggle">
@@ -796,7 +838,11 @@ export function LaunchForm(props: LaunchFormProps) {
           </span>
         </label>
 
-        <div className="wallet-row-editor" role="group" aria-label="Protected wallet buys">
+        <div
+          className="wallet-row-editor"
+          role="group"
+          aria-label="Protected wallet buys"
+        >
           <div className="wallet-row-editor-head" aria-hidden="true">
             <span>Recipient wallet</span>
             <span>Buy amount ({selectedPair.symbol})</span>
@@ -815,7 +861,9 @@ export function LaunchForm(props: LaunchFormProps) {
                   <span className="sr-only">Recipient wallet {index + 1}</span>
                   <input
                     value={row.address}
-                    onChange={(event) => updateWalletRow(row.id, { address: event.target.value })}
+                    onChange={(event) =>
+                      updateWalletRow(row.id, { address: event.target.value })
+                    }
                     placeholder="0x wallet address"
                     className="mono"
                     disabled={busy}
@@ -825,7 +873,9 @@ export function LaunchForm(props: LaunchFormProps) {
                   <span className="sr-only">Buy amount for wallet {index + 1}</span>
                   <input
                     value={row.amount}
-                    onChange={(event) => updateWalletRow(row.id, { amount: event.target.value })}
+                    onChange={(event) =>
+                      updateWalletRow(row.id, { amount: event.target.value })
+                    }
                     inputMode="decimal"
                     placeholder={bundleEnabled && isNativePair ? "0.01" : "Optional"}
                     disabled={busy || !bundleEnabled || !isNativePair}
@@ -888,7 +938,8 @@ export function LaunchForm(props: LaunchFormProps) {
             ))}
             <li>
               At more than roughly 8 native bundle buys, later transactions may confirm
-              after the short anti-snipe window. They remain exempt but may buy at a moved price.
+              after the short anti-snipe window. They remain exempt but may buy at a moved
+              price.
             </li>
           </ul>
         </details>
@@ -927,7 +978,11 @@ export function LaunchForm(props: LaunchFormProps) {
                     </td>
                     <td className="hint">
                       {result.detail ??
-                        (result.hash !== null ? <span className="mono">{result.hash}</span> : "")}
+                        (result.hash !== null ? (
+                          <span className="mono">{result.hash}</span>
+                        ) : (
+                          ""
+                        ))}
                     </td>
                   </tr>
                 ))}

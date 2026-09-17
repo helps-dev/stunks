@@ -1,0 +1,124 @@
+name: CI
+
+# Why this exists.
+#
+# This project's guarantees are enforced by tooling, not by convention: a lint rule
+# bans Number()/parseFloat()/parseInt() so the wei-exact quote math cannot be silently
+# broken, another bans address literals outside @stunks/config, and 300+ tests pin the
+# curve maths, the venue resolver and the indexer's failure semantics.
+#
+# All of that ran only when someone remembered to run it locally. Two consequences
+# already showed up in the tree: apps/web had no `test` script at all, so its launch
+# funding-plan tests never executed in any run of `pnpm test`, and a Next.js release
+# carrying four critical RCE advisories sat in the lockfile unnoticed.
+#
+# Everything here is hermetic. No network is touched: the live mainnet checks are
+# opt-in behind RUN_LIVE_TESTS, and the database integration suite behind RUN_DB_TESTS.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # So an advisory published after a green merge still surfaces.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Turbo prints progress rather than an interactive TUI on CI.
+  TURBO_TELEMETRY_DISABLED: 1
+  DO_NOT_TRACK: 1
+
+jobs:
+  verify:
+    name: typecheck · lint · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          # The floor declared in engines. Building on the floor is the point: it
+          # catches a dependency that quietly needs something newer.
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Prisma's client is generated, not committed, and @stunks/database does not
+      # typecheck without it.
+      - name: Generate Prisma client
+        run: pnpm prisma:generate
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+      - name: Prisma schema is valid and formatted
+        run: |
+          pnpm prisma:validate
+          pnpm prisma:format
+          git diff --exit-code prisma/schema.prisma
+
+      - name: Formatting
+        run: pnpm format:check
+
+      - name: Build
+        run: pnpm build
+        env:
+          # Compiled into the browser bundle at build time. These are public values —
+          # a chain id and a published contract address — and the build fails without
+          # them because the env schema refuses to invent a default for either.
+          NEXT_PUBLIC_CHAIN_ID: "4663"
+          NEXT_PUBLIC_PONS_V2_FACTORY: "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e"
+          NEXT_PUBLIC_RPC_ENDPOINTS: "https://robinhood.drpc.org,https://rpc.ordofi.network"
+          NEXT_PUBLIC_APP_URL: "http://localhost:3000"
+
+  audit:
+    name: dependency advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Production dependencies only, and only high and above. This is a wallet dApp:
+      # a server-side RCE in the app that renders the trading UI is the one class of
+      # bug that lets an attacker rewrite what a user is asked to sign.
+      #
+      # The moderate findings that remain all arrive through wagmi's WalletConnect and
+      # MetaMask connector chain, which this app does not configure — it registers
+      # `injected` only. Failing the build on them would train people to ignore this.
+      - name: Audit production dependencies
+        run: pnpm audit --prod --audit-level high

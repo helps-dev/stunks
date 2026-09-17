@@ -102,10 +102,32 @@ export async function buildHealthSnapshot(deps: HealthDeps): Promise<HealthSnaps
 }
 
 /**
+ * Interface the health server binds to.
+ *
+ * Loopback by default, and that default is load-bearing. This endpoint reports
+ * checkpoints, RPC endpoint URLs and failure counts with no authentication in front of
+ * it, so it is an internal operational view and nothing else.
+ *
+ * `server.listen(port)` with no host binds every interface. Under Docker that was
+ * masked by a `127.0.0.1:9464:9464` port mapping, but the systemd unit has no such
+ * mapping — it only sets HEALTH_PORT — so on that path the endpoint was reachable on
+ * the VPS's public IP. Setting a port never restricted a binding; only a host does.
+ *
+ * HEALTH_HOST exists for the one legitimate exception: a container that must be probed
+ * from outside its own network namespace. Anything reachable beyond loopback needs
+ * something in front of it.
+ */
+const DEFAULT_HEALTH_HOST = "127.0.0.1";
+
+/**
  * Minimal health server. No framework: the indexer is a worker, and one endpoint is
  * not a reason to take on a web dependency.
  */
-export function startHealthServer(port: number, deps: HealthDeps): Server {
+export function startHealthServer(
+  port: number,
+  deps: HealthDeps,
+  host: string = DEFAULT_HEALTH_HOST,
+): Server {
   const server = createServer((request, response) => {
     if (request.url !== "/health" && request.url !== "/") {
       response.writeHead(404).end();
@@ -130,6 +152,6 @@ export function startHealthServer(port: number, deps: HealthDeps): Server {
       });
   });
 
-  server.listen(port);
+  server.listen(port, host);
   return server;
 }

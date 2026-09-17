@@ -55,7 +55,10 @@ async function resolveVerifiedPairAssets(
   factory: Address,
 ): Promise<readonly LaunchPairAsset[]> {
   const historical = await launchPairCandidates();
-  const candidates = new Map<string, { address: Address; historicalLaunchCount: number }>();
+  const candidates = new Map<
+    string,
+    { address: Address; historicalLaunchCount: number }
+  >();
 
   candidates.set(NATIVE_PAIR_TOKEN.toLowerCase(), {
     address: NATIVE_PAIR_TOKEN,
@@ -69,7 +72,10 @@ async function resolveVerifiedPairAssets(
     const existing = candidates.get(key);
     candidates.set(key, {
       address,
-      historicalLaunchCount: Math.max(existing?.historicalLaunchCount ?? 0, candidate.launchCount),
+      historicalLaunchCount: Math.max(
+        existing?.historicalLaunchCount ?? 0,
+        candidate.launchCount,
+      ),
     });
   }
 
@@ -98,9 +104,21 @@ async function resolveVerifiedPairAssets(
         await readPairTokenEconomics(client, factory, candidate.address);
 
         const [name, symbol, decimals] = await Promise.all([
-          client.readContract({ address: candidate.address, abi: erc20Abi, functionName: "name" }),
-          client.readContract({ address: candidate.address, abi: erc20Abi, functionName: "symbol" }),
-          client.readContract({ address: candidate.address, abi: erc20Abi, functionName: "decimals" }),
+          client.readContract({
+            address: candidate.address,
+            abi: erc20Abi,
+            functionName: "name",
+          }),
+          client.readContract({
+            address: candidate.address,
+            abi: erc20Abi,
+            functionName: "symbol",
+          }),
+          client.readContract({
+            address: candidate.address,
+            abi: erc20Abi,
+            functionName: "decimals",
+          }),
         ]);
 
         const decimalCount = decimals as number;
@@ -235,14 +253,20 @@ export default async function LaunchPage() {
               <span className="trust-row-icon">0</span>
               <div>
                 <strong>STUNKS fee</strong>
-                <p>Zero. The live Pons launch fee and network gas are disclosed in the form.</p>
+                <p>
+                  Zero. The live Pons launch fee and network gas are disclosed in the
+                  form.
+                </p>
               </div>
             </div>
             <div className="trust-row">
               <span className="trust-row-icon">✓</span>
               <div>
                 <strong>Verified pair candidate</strong>
-                <p>ERC-20 choices are checked live by the factory; ETH follows Pons&apos;s native path.</p>
+                <p>
+                  ERC-20 choices are checked live by the factory; ETH follows Pons&apos;s
+                  native path.
+                </p>
               </div>
             </div>
             <div className="trust-row">

@@ -31,6 +31,7 @@ Chain and read real Pons V2 state. **No trading, no launching, no fake data, no
 UI beyond a proof-of-read page.**
 
 ### 1.1 Repository and tooling
+
 - `git init`, `.gitignore`, `.env.example`, license, README
 - pnpm workspace + Turborepo pipeline (`build`, `lint`, `typecheck`, `test`)
 - TypeScript strict, ESLint, Prettier
@@ -39,12 +40,14 @@ UI beyond a proof-of-read page.**
   - no raw `0x…40-hex` address literals outside `packages/config`
 
 ### 1.2 `packages/config`
+
 - Chain definition for 4663 (verified values only)
 - RPC list from env with documented per-endpoint quirks
 - Single configured Pons input: the V2 factory address
 - Zod-validated env loading that fails fast and never falls back to defaults
 
 ### 1.3 `packages/web3`
+
 - viem client factory
 - RPC pool: health tracking, latency/error-rate stats, retry with backoff,
   failover, and treating non-JSON bodies as transport failures
@@ -52,6 +55,7 @@ UI beyond a proof-of-read page.**
 - `assertChainId` guard used by every write path
 
 ### 1.4 `packages/pons`
+
 - Verified ABI fragments, including the five snipe-tax functions recovered from
   bytecode
 - On-chain address resolution from the factory, cached per chain
@@ -65,6 +69,7 @@ UI beyond a proof-of-read page.**
 - Event decoders keyed by verified `topic0`
 
 ### 1.5 `packages/database` + Prisma schema
+
 - Postgres schema for the models in the PRD, money columns as `NUMERIC(78,0)`
 - `Trade` unique on `(chainId, transactionHash, logIndex)`
 - `Token` unique on `(chainId, address)`
@@ -76,11 +81,13 @@ UI beyond a proof-of-read page.**
 - Migration committed; **no seed data**
 
 ### 1.6 `packages/types`, `packages/utils`
+
 - Shared domain types, `GraduationPhase`, venue union
 - bigint money helpers: parse, format, bps math, percentage, floor-division
   helpers matching contract semantics exactly
 
 ### 1.7 Tests
+
 - Unit: quote math against the three verified vectors from the audit; graduation
   progress; `reservedTokens` derivation; fee split arithmetic; venue resolver
   across all four phases; bps helpers
@@ -90,14 +97,17 @@ UI beyond a proof-of-read page.**
   the core of the trading engine
 
 ### 1.8 `scripts/verify-pons.ts`
+
 The audit probes, promoted to a committed script so the documented numbers are
 re-checkable and drift is visible.
 
 ### 1.9 Proof-of-read page
+
 One route rendering live launch config, live fee policy, and resolved addresses,
 all labelled with their source. No token lists, no charts, no placeholder cards.
 
 ### Phase 1 exit criteria
+
 - `pnpm build`, `pnpm lint`, `pnpm typecheck`, `pnpm test` all pass
 - Integration tests read real Robinhood Chain state
 - Verified quote math reproduces on-chain results exactly in CI
@@ -105,6 +115,7 @@ all labelled with their source. No token lists, no charts, no placeholder cards.
 - Docs match the code
 
 ### Explicitly not in Phase 1
+
 Launch transactions, trading, indexer, charts, explore, competition, admin.
 
 ---
@@ -135,6 +146,7 @@ Acceptance test: a small-value mainnet launch with a real whitelist, measuring
 achieved age and tax per recipient.
 
 ## Phase 3 — Indexer
+
 **Gate:** settle the backfill data source first (paid archive RPC vs Envio
 HyperSync). Then: block scanner, decoder, processor, checkpointing with block
 hashes, reorg handling with confirmation depth, RPC failover, dynamic per-curve
@@ -142,33 +154,40 @@ subscription for `CurveBuy`/`CurveSell`, graduation indexing, holder accounting
 (mint/burn/zero-address aware), health metrics.
 
 ## Phase 4 — Token page
+
 Token page, OHLC candles from indexed trades, trade history, graduation progress,
 holders, token info, phase-aware states including `Swept`.
 
 ## Phase 5 — Trading
+
 Curve buy/sell with simulation-backed quotes, slippage and price impact, partial
 fill handling, snipe-window handling. Uniswap V4 trading **only after** the V4
 quoting path is verified.
 
 ## Phase 6 — Explore
+
 Search, filters, sorting, trending engine with configurable weights, graduating
 and graduated views, cursor pagination, Redis caching.
 
 ## Phase 7 — Creator
+
 Creator profile and dashboard from indexed data. Creator earnings only once the
 fee escrow surface is verified.
 
 ## Phase 8 — Competition
+
 Volume leaderboards from indexed trades, configurable competition rules,
 anti-abuse (self-trade exclusion, minimum sizes, per-wallet caps, exclusion
 lists, wash-trade heuristics), competition stats.
 
 ## Phase 9 — Rewards
+
 Only after economics are verified. Off-chain leaderboard first; on-chain
 distribution and any `StunksCompetition.sol` / `StunksRewards.sol` only if
 genuinely required.
 
 ## Phase 10 — Production hardening
+
 Security review, RPC failover drills, indexer recovery drills, monitoring,
 rate limiting, load testing, E2E, deployment, backups, incident runbook.
 

@@ -72,7 +72,9 @@ export class LaunchBatchRepository {
     );
 
     // ── 2. create the missing ones ──
-    const missing = creatorAddresses.filter((address) => !creatorIdByAddress.has(address));
+    const missing = creatorAddresses.filter(
+      (address) => !creatorIdByAddress.has(address),
+    );
     let creatorsCreated = 0;
     if (missing.length > 0) {
       const result = await this.prisma.creator.createMany({

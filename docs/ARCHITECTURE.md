@@ -85,25 +85,25 @@ provisioning is an open setup task (`KNOWN_RISKS.md`, R9).
 
 Verified by direct `eth_chainId` / `eth_getBlockByNumber` calls.
 
-| Item | Value | How verified |
-| --- | --- | --- |
-| Chain ID | `4663` (`0x1237`) | `eth_chainId` |
-| Native currency | ETH, 18 decimals | Arbitrum Orbit L2, ETH gas |
-| Testnet chain ID | `46630` | Robinhood docs (not probed) |
-| Measured block time | **0.1013 s** | timestamp delta over 10,000 blocks |
-| Blocks per day | **~852,912** | derived from the above |
-| Head at audit | `63,444,974` | `eth_blockNumber` |
+| Item                | Value             | How verified                       |
+| ------------------- | ----------------- | ---------------------------------- |
+| Chain ID            | `4663` (`0x1237`) | `eth_chainId`                      |
+| Native currency     | ETH, 18 decimals  | Arbitrum Orbit L2, ETH gas         |
+| Testnet chain ID    | `46630`           | Robinhood docs (not probed)        |
+| Measured block time | **0.1013 s**      | timestamp delta over 10,000 blocks |
+| Blocks per day      | **~852,912**      | derived from the above             |
+| Head at audit       | `63,444,974`      | `eth_blockNumber`                  |
 
 ### RPC endpoints
 
-| Endpoint | Result | Notes |
-| --- | --- | --- |
-| `https://rpc.mainnet.chain.robinhood.com` | **unreachable from this network** | `robinhood.com` DNS is intercepted here and resolves to `internetpositif.id` (`36.86.63.185`), an ISP content filter. A local network problem, not a production one. |
-| `https://rpc.ordofi.network` | **works**, 4663 | verified; used by third-party Pons tooling |
-| `https://robinhood.drpc.org` | **works**, 4663, archive state at block 1 | `eth_getLogs` rejected above a small span; ~100-block windows succeed |
-| `https://rpc.nodeflare.app/robinhood/public` | **works**, 4663 | Not listed on the public chains page but the route exists. Rate limited (~2 req/s); returns an HTML 403 page instead of JSON when throttled — the client must treat non-JSON as a transport failure, not a chain answer. |
-| `https://robinhoodchain.blockscout.com` | Cloudflare 403 from this network | blocks explorer-API verification locally |
-| `https://4663.rpc.thirdweb.com` | `Invalid chain` | not supported |
+| Endpoint                                     | Result                                    | Notes                                                                                                                                                                                                                    |
+| -------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `https://rpc.mainnet.chain.robinhood.com`    | **unreachable from this network**         | `robinhood.com` DNS is intercepted here and resolves to `internetpositif.id` (`36.86.63.185`), an ISP content filter. A local network problem, not a production one.                                                     |
+| `https://rpc.ordofi.network`                 | **works**, 4663                           | verified; used by third-party Pons tooling                                                                                                                                                                               |
+| `https://robinhood.drpc.org`                 | **works**, 4663, archive state at block 1 | `eth_getLogs` rejected above a small span; ~100-block windows succeed                                                                                                                                                    |
+| `https://rpc.nodeflare.app/robinhood/public` | **works**, 4663                           | Not listed on the public chains page but the route exists. Rate limited (~2 req/s); returns an HTML 403 page instead of JSON when throttled — the client must treat non-JSON as a transport failure, not a chain answer. |
+| `https://robinhoodchain.blockscout.com`      | Cloudflare 403 from this network          | blocks explorer-API verification locally                                                                                                                                                                                 |
+| `https://4663.rpc.thirdweb.com`              | `Invalid chain`                           | not supported                                                                                                                                                                                                            |
 
 The RPC layer must therefore assume: heterogeneous log-range limits, aggressive
 rate limits, and **non-JSON error bodies**. `packages/web3` wraps every endpoint
@@ -172,7 +172,7 @@ Simulation is the source of truth and is required — not optional — whenever 
 fast path cannot be trusted:
 
 - the curve is inside its snipe-tax window (`block.timestamp - launchedAt <
-  snipeTaxSeconds`), where an undocumented decaying tax of up to **99%** applies
+snipeTaxSeconds`), where an undocumented decaying tax of up to **99%** applies
 - the trade is large enough to be partially filled against `reservedTokens`
 - the token has graduated (Uniswap V4 path)
 
@@ -218,7 +218,7 @@ on-chain  285,714,285,714,285,714,285,714,285   match
 ```
 
 Because `phantomQuote * supply` is held constant, the quote-side threshold and
-the token-side allocation are the *same point*. Progress may be displayed as
+the token-side allocation are the _same point_. Progress may be displayed as
 `realQuoteReserve / graduationThreshold`, which is what the PRD specifies.
 
 But the actual **trigger** is token-side: `readyToGraduate()` is
@@ -313,20 +313,20 @@ Numbers from running the real indexer against mainnet, not estimates.
 
 ### `eth_getLogs` capability is not implied by reachability
 
-| Endpoint | Widest window accepted | Usable for log scanning |
-| --- | --- | --- |
-| `robinhood.drpc.org` | 100 blocks (rejected at 250) | yes, slowly |
-| `rpc.ordofi.network` | **none succeeded** | **no** — `eth_call` only |
+| Endpoint             | Widest window accepted       | Usable for log scanning  |
+| -------------------- | ---------------------------- | ------------------------ |
+| `robinhood.drpc.org` | 100 blocks (rejected at 250) | yes, slowly              |
+| `rpc.ordofi.network` | **none succeeded**           | **no** — `eth_call` only |
 
 A healthy endpoint may still be useless for logs. The indexer's endpoint list must
 contain at least one that actually serves `eth_getLogs`.
 
 ### Backfill source
 
-| Source | Full 36.8M-block backfill |
-| --- | --- |
-| Free RPC, 100-block windows at ~2 req/s | **~51 hours** |
-| Envio HyperSync | minutes (millions of blocks per query) |
+| Source                                  | Full 36.8M-block backfill              |
+| --------------------------------------- | -------------------------------------- |
+| Free RPC, 100-block windows at ~2 req/s | **~51 hours**                          |
+| Envio HyperSync                         | minutes (millions of blocks per query) |
 
 HyperSync is confirmed to support chain 4663 and to track its head. It needs a free
 token. This is why `LogSource` is an interface: the choice is configuration.

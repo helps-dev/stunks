@@ -363,12 +363,11 @@ export class RpcPool {
      * The body still has to parse as JSON to be trusted, so a throttled endpoint's
      * HTML page is classified exactly as before.
      */
-    const carriesError =
-      Array.isArray(payload)
-        ? payload.some((entry) => (entry as BatchEntry | null)?.error !== undefined)
-        : typeof payload === "object" &&
-          payload !== null &&
-          (payload as BatchEntry).error !== undefined;
+    const carriesError = Array.isArray(payload)
+      ? payload.some((entry) => (entry as BatchEntry | null)?.error !== undefined)
+      : typeof payload === "object" &&
+        payload !== null &&
+        (payload as BatchEntry).error !== undefined;
 
     if (!response.ok && !carriesError) {
       throw new RpcCallError({
@@ -417,7 +416,8 @@ export class RpcPool {
     const failures: RpcCallError[] = [];
 
     const capable = this.selectOrder().filter(
-      (endpoint) => endpoint.maxBatchSize === null || endpoint.maxBatchSize >= calls.length,
+      (endpoint) =>
+        endpoint.maxBatchSize === null || endpoint.maxBatchSize >= calls.length,
     );
     if (capable.length === 0) {
       throw new BatchNotSupportedError(
@@ -453,7 +453,10 @@ export class RpcPool {
           // on instead of spending the remaining attempts learning it again.
           if (failure.kind === "BATCH_TOO_LARGE") {
             const allowed = parseAllowedBatchSize(failure.message);
-            endpoint.maxBatchSize = Math.min(allowed ?? calls.length - 1, calls.length - 1);
+            endpoint.maxBatchSize = Math.min(
+              allowed ?? calls.length - 1,
+              calls.length - 1,
+            );
             break;
           }
 
@@ -580,7 +583,8 @@ export class RpcPool {
     // A too-wide log range is the caller's problem, not the endpoint's. Counting
     // it against health would demote a perfectly good archive node. A batch-size
     // rejection is a billing plan, not ill health, and the same applies.
-    if (failure.kind === "LOG_RANGE_TOO_WIDE" || failure.kind === "BATCH_TOO_LARGE") return;
+    if (failure.kind === "LOG_RANGE_TOO_WIDE" || failure.kind === "BATCH_TOO_LARGE")
+      return;
     endpoint.consecutiveFailures += 1;
     if (endpoint.consecutiveFailures >= this.failureThreshold) {
       endpoint.cooldownUntil = this.now() + this.cooldownMs;

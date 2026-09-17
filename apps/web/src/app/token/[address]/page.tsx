@@ -244,7 +244,10 @@ export default async function TokenPage({ params }: PageProps) {
       <div className="tokenhead">
         <div className="token-identity">
           <span className="token-avatar token-avatar-lg" aria-hidden="true">
-            {token.symbol.replace(/[^a-z0-9]/gi, "").slice(0, 2).toUpperCase() || "?"}
+            {token.symbol
+              .replace(/[^a-z0-9]/gi, "")
+              .slice(0, 2)
+              .toUpperCase() || "?"}
           </span>
           <div>
             <p className="page-kicker">Live Pons V2 launch</p>
@@ -274,60 +277,64 @@ export default async function TokenPage({ params }: PageProps) {
             <p className="page-kicker">Live trading venue</p>
             <h2>Trade {withDollar(token.symbol)}</h2>
           </div>
-          {live && live.venueKind === "CURVE" && <span className="badge ok">Pons curve</span>}
+          {live && live.venueKind === "CURVE" && (
+            <span className="badge ok">Pons curve</span>
+          )}
         </div>
-      {liveError !== null ? (
-        <div className="error">
-          <p style={{ color: "var(--text)", margin: 0 }}>
-            The chain could not be reached, so STUNKS cannot confirm whether this token is
-            tradeable right now. Trading is disabled rather than guessed.
-          </p>
-          <p className="mono hint">{liveError}</p>
-        </div>
-      ) : live && live.venueKind === "CURVE" ? (
-        <div className="token-trade-grid">
-          <div className="panel pad token-trade-summary">
-            <span className="surface-label">Verified curve route</span>
-            <p className="hint" style={{ marginTop: 10 }}>
-              Tradeable on its Pons bonding curve. Total fee per trade:{" "}
-              <span className="mono">{formatBps(live.feeBps + live.creatorTaxBps)}</span> (
-              {formatBps(live.feeBps)} curve + {formatBps(live.creatorTaxBps)} creator).
-              STUNKS adds nothing on top.
+        {liveError !== null ? (
+          <div className="error">
+            <p style={{ color: "var(--text)", margin: 0 }}>
+              The chain could not be reached, so STUNKS cannot confirm whether this token
+              is tradeable right now. Trading is disabled rather than guessed.
             </p>
-            <div className="trade-summary-points">
-              <span>✓ Fresh quote before signing</span>
-              <span>✓ On-chain minimum received</span>
-              <span>✓ Non-custodial wallet flow</span>
-            </div>
+            <p className="mono hint">{liveError}</p>
           </div>
-          <TradePanel
-            token={token.address as Address}
-            factory={getChainContracts(ROBINHOOD_CHAIN_ID).ponsV2Factory}
-            symbol={withDollar(token.symbol)}
-            tokenDecimals={token.decimals}
-            quoteDecimals={quoteDecimals}
-            quoteSymbol={quoteSymbol}
-            quoteIsNative={isNative}
-            quoteTokenAddress={token.pairTokenAddress as Address}
-          />
-        </div>
-      ) : live && live.venueKind === "UNISWAP_V4" ? (
-        <div className="panel pad">
-          <p className="hint" style={{ margin: 0 }}>
-            Graduated. Trading happens in a Uniswap V4 pool governed by the Pons meme
-            hook. STUNKS does not yet route V4 swaps — the quoting path for V4 is not
-            verified, and guessing it would misprice trades.
-          </p>
-        </div>
-      ) : (
-        <div className="error">
-          <p style={{ color: "var(--text)", margin: 0 }}>
-            {live?.venueReason
-              ? describeNoVenue(live.venueReason as never)
-              : "Trading is unavailable for this token right now."}
-          </p>
-        </div>
-      )}
+        ) : live && live.venueKind === "CURVE" ? (
+          <div className="token-trade-grid">
+            <div className="panel pad token-trade-summary">
+              <span className="surface-label">Verified curve route</span>
+              <p className="hint" style={{ marginTop: 10 }}>
+                Tradeable on its Pons bonding curve. Total fee per trade:{" "}
+                <span className="mono">
+                  {formatBps(live.feeBps + live.creatorTaxBps)}
+                </span>{" "}
+                ({formatBps(live.feeBps)} curve + {formatBps(live.creatorTaxBps)}{" "}
+                creator). STUNKS adds nothing on top.
+              </p>
+              <div className="trade-summary-points">
+                <span>✓ Fresh quote before signing</span>
+                <span>✓ On-chain minimum received</span>
+                <span>✓ Non-custodial wallet flow</span>
+              </div>
+            </div>
+            <TradePanel
+              token={token.address as Address}
+              factory={getChainContracts(ROBINHOOD_CHAIN_ID).ponsV2Factory}
+              symbol={withDollar(token.symbol)}
+              tokenDecimals={token.decimals}
+              quoteDecimals={quoteDecimals}
+              quoteSymbol={quoteSymbol}
+              quoteIsNative={isNative}
+              quoteTokenAddress={token.pairTokenAddress as Address}
+            />
+          </div>
+        ) : live && live.venueKind === "UNISWAP_V4" ? (
+          <div className="panel pad">
+            <p className="hint" style={{ margin: 0 }}>
+              Graduated. Trading happens in a Uniswap V4 pool governed by the Pons meme
+              hook. STUNKS does not yet route V4 swaps — the quoting path for V4 is not
+              verified, and guessing it would misprice trades.
+            </p>
+          </div>
+        ) : (
+          <div className="error">
+            <p style={{ color: "var(--text)", margin: 0 }}>
+              {live?.venueReason
+                ? describeNoVenue(live.venueReason as never)
+                : "Trading is unavailable for this token right now."}
+            </p>
+          </div>
+        )}
       </section>
 
       {progress && live && live.phase === 0 && (
@@ -388,7 +395,17 @@ export default async function TokenPage({ params }: PageProps) {
               label="Total supply"
               value={formatUnitsExact(token.totalSupply, token.decimals)}
             />
-            <Row label="Holders" value={String(token.holderCount)} />
+            {/*
+              Not indexed, so not shown as a number.
+
+              Nothing writes the holders table: the curve processor carries the token's
+              existing `holderCount` straight back into its own update, so the column is
+              permanently 0. Rendering that 0 stated a fact nobody had measured, in the
+              one place on the page a reader would take it for one — while the holders
+              table further down correctly said it was not indexed yet. Invariant 4 does
+              not have an exception for a value that merely looks plausible.
+            */}
+            <Row label="Holders" value="Not indexed yet" />
             <Row
               label="Trades"
               value={`${token.tradeCount} (${token.buyCount} buys, ${token.sellCount} sells)`}
