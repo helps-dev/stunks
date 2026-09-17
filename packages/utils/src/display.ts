@@ -64,13 +64,13 @@ function quotientWithPrecision(
  *
  * The scaling is easy to get wrong, so stated explicitly:
  *
- *   priceScaled = quoteAmount * 1e18 / tokenAmount
+ *   priceScaled = quoteAmount * PRICE_SCALE / tokenAmount        (PRICE_SCALE = 1e27)
  *
- * For an 18-decimal token, 1e18 base units IS one whole token, so `priceScaled` is
- * already "quote base units per whole token". Converting it to a human figure
- * therefore divides by the QUOTE decimals only. Dividing by `quoteDecimals + 18` — as
- * a first version of this did — scales the result down by 1e18 and renders every price
- * as a string of zeros.
+ * For an 18-decimal token, 1e18 base units IS one whole token, so a price at scale
+ * 1e18 would already be "quote base units per whole token". The indexer's scale is
+ * 1e27 rather than 1e18 — see the note in apps/indexer/src/pricing.ts — so the extra
+ * nine digits have to come back out here, which is what `priceScaleExponent` does.
+ * Getting that wrong renders every price either as zeros or a billion times too big.
  *
  * `tokenDecimals` is a parameter rather than an assumption. Every Pons launch observed
  * uses 18, but a price that silently assumes it would be wrong by orders of magnitude
@@ -85,12 +85,21 @@ export function formatPrice(
   quoteDecimals: number,
   significantDigits = 4,
   tokenDecimals = 18,
+  /**
+   * Base-10 exponent of the scale `priceScaled` carries.
+   *
+   * Passed rather than assumed. It was hard-coded to 18, which silently became wrong
+   * the moment the indexer's PRICE_SCALE moved to 1e27 to stop low-decimal quote
+   * assets truncating to zero — a display off by 1e9 is not a rounding difference.
+   */
+  priceScaleExponent = 27,
 ): string {
   if (priceScaled <= 0n) return "0";
 
-  // price_per_whole_token = priceScaled * 10^tokenDecimals / 1e18, in quote base units.
-  // Fold that into the divisor exponent rather than dividing twice and losing precision.
-  const totalDecimals = quoteDecimals + 18 - tokenDecimals;
+  // price_per_whole_token = priceScaled * 10^tokenDecimals / 10^priceScaleExponent,
+  // in quote base units. Fold that into the divisor exponent rather than dividing
+  // twice and losing precision.
+  const totalDecimals = quoteDecimals + priceScaleExponent - tokenDecimals;
   const full = formatUnitsExact(priceScaled, totalDecimals);
 
   const [whole = "0", fraction = ""] = full.split(".");

@@ -15,15 +15,53 @@ import { mulDiv } from "@stunks/utils";
  *
  * PRICE UNIT, stated once so it is never ambiguous:
  *
- *   price = quote base units per 1e18 token base units
+ *   price = quote base units per 1e18 token base units, times PRICE_SCALE
  *
- * Scaling by 1e18 is what keeps a memecoin's price expressible at all. A token
- * priced at ~1.7e-9 ETH would truncate to zero in integer arithmetic without it;
- * with it, that becomes ~1_741_958_762, which is exact and comparable.
+ * Scaling is what keeps a memecoin's price expressible at all. A token priced at
+ * ~1.7e-9 ETH would truncate to zero in integer arithmetic without it.
+ *
+ * WHY THE SCALE IS 1e27 AND NOT 1e18
+ *
+ * 1e18 was enough only for an 18-decimal quote asset. It is not a property of the
+ * token — it is a property of the QUOTE, and this chain has approved quote assets
+ * with 6 and 8 decimals. Fewer decimals in the quote leg means a numerically smaller
+ * `quoteAmount` against the same 1e18-scaled `tokenAmount`, and the quotient
+ * truncates.
+ *
+ * Measured on 2026-09-17 against the indexed database:
+ *
+ *   quote decimals   tokens   price = 0
+ *   18               21,214   78      (0.4%)
+ *    6                2,022   21      (1.0%)
+ *    8                  124   124     (100%)
+ *
+ * Every token quoted in the 8-decimal asset had a price of zero, including SATOSHI
+ * with 395 settled trades. Its most recent trade moved 2,823 quote base units for
+ * 540,440,857,263,784,622,848,790 token base units:
+ *
+ *   2823 * 1e18 / 5.4044e23 = 0.0052  ->  floors to 0
+ *   2823 * 1e27 / 5.4044e23 = 5223890 ->  exact enough to sort and display
+ *
+ * Nothing about this is a float bug, which is why the lint rule could not see it. It
+ * is integer truncation at a scale chosen for one asset and applied to all of them.
+ *
+ * MARKET CAP AND VOLUME ARE UNAFFECTED. `marketCapFromPrice` divides the same scale
+ * back out, so market cap stays in quote base units and every existing formatting
+ * call site keeps working. Only `price` itself changes scale — which does mean stored
+ * price rows written under the old scale are 1e9 too small and must be recomputed.
  */
 
-/** The fixed scale price is expressed against. Do not change without a migration. */
-export const PRICE_SCALE = 10n ** 18n;
+/**
+ * The fixed scale price is expressed against.
+ *
+ * Changing this changes the meaning of every stored `price`, in both `tokens` and
+ * `trades`. Rows written under a previous scale are not comparable with new ones, so
+ * a change has to be followed by a recompute — see `scripts/recompute-prices.ts`.
+ */
+export const PRICE_SCALE = 10n ** 27n;
+
+/** The scale used before 2026-09-17. Retained so a migration can recognise old rows. */
+export const LEGACY_PRICE_SCALE = 10n ** 18n;
 
 export interface TradeAmounts {
   /** Quote asset that actually moved, in its own base units. */

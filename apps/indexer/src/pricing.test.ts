@@ -18,6 +18,60 @@ const SUPPLY = 1_000_000_000_000_000_000_000_000_000n; // 1e27, live config 0
 const PHANTOM = 1_680_000_000_000_000_000n; // 1.68 ETH
 const ONE_ETH = 1_000_000_000_000_000_000n;
 
+/**
+ * The quote asset's decimals, not the token's, are what break integer pricing.
+ *
+ * Measured against the indexed database on 2026-09-17: every one of the 124 tokens
+ * quoted in the 8-decimal asset had price 0, including SATOSHI after 395 settled
+ * trades. 1e18 was a scale chosen for an 18-decimal quote and applied to all of them.
+ */
+describe("price scale against low-decimal quote assets", () => {
+  it("prices SATOSHI's real trade, which the old scale floored to zero", () => {
+    // The most recent SATOSHI sell: 2,823 quote base units (8 decimals) for
+    // 540,440,857,263,784,622,848,790 token base units.
+    const quoteAmount = 2_823n;
+    const tokenAmount = 540_440_857_263_784_622_848_790n;
+
+    expect(priceFromTrade({ quoteAmount, tokenAmount })).toBeGreaterThan(0n);
+    // What the old scale produced, and why the UI showed "0" for a token that had
+    // traded 395 times.
+    expect((quoteAmount * 10n ** 18n) / tokenAmount).toBe(0n);
+  });
+
+  it("keeps a full order of magnitude of headroom below that", () => {
+    // Ten times smaller again still resolves, so this is not a fix that only just
+    // clears the one observed vector.
+    expect(
+      priceFromTrade({
+        quoteAmount: 282n,
+        tokenAmount: 540_440_857_263_784_622_848_790n,
+      }),
+    ).toBeGreaterThan(0n);
+  });
+
+  it("leaves market cap in quote base units, so display call sites are unaffected", () => {
+    // The scale is divided back out, so the same real price yields the same cap
+    // whichever scale it was stored at. This is what made the change safe for the UI:
+    // marketCap and volume keep their units, only `price` gains resolution.
+    const supply = 10n ** 27n;
+    const realPrice = 1_680_000_000n; // as stored under the old 1e18 scale
+    const legacyCap = (realPrice * supply) / 10n ** 18n;
+    const currentCap = marketCapFromPrice(realPrice * 10n ** 9n, supply);
+    expect(currentCap).toBe(legacyCap);
+  });
+
+  it("still prices an 18-decimal quote the same way, in real terms", () => {
+    // 1 ETH bought 366,037,735,849,056,603,773,584,905 tokens — the verified vector.
+    const price = priceFromTrade({
+      quoteAmount: 10n ** 18n,
+      tokenAmount: 366_037_735_849_056_603_773_584_905n,
+    });
+    // Same real price as the old 2_731_958_762n at 1e18, now carrying nine more
+    // digits of resolution rather than a different value.
+    expect(price / 10n ** 9n).toBe(2_731_958_762n);
+  });
+});
+
 describe("priceFromTrade", () => {
   it("prices the verified 1 ETH buy vector", () => {
     // 1 ETH bought 366,037,735,849,056,603,773,584,905 tokens on the reference curve.
@@ -25,19 +79,20 @@ describe("priceFromTrade", () => {
       quoteAmount: ONE_ETH,
       tokenAmount: 366_037_735_849_056_603_773_584_905n,
     });
-    // ~2.73e-9 ETH per token, expressed at 1e18 scale.
-    expect(price).toBe(2_731_958_762n);
+    // ~2.73e-9 ETH per token, at the 1e27 scale. The old 1e18 scale rendered this as
+    // 2_731_958_762 — the same real price, nine digits of resolution shorter.
+    expect(price).toBe(2_731_958_762_886_597_938n);
   });
 
   it("keeps a memecoin price expressible instead of truncating it to zero", () => {
-    // Without the 1e18 scale, quote/token here would floor to 0 and every downstream
+    // Without the scale, quote/token here would floor to 0 and every downstream
     // market cap would be zero.
     const price = priceFromTrade({
       quoteAmount: 10_000_000_000_000_000n, // 0.01 ETH
       tokenAmount: 5_740_664_023_199_384_506_125_347n,
     });
     expect(price).toBeGreaterThan(0n);
-    expect(price).toBe(1_741_958_762n);
+    expect(price).toBe(1_741_958_762_886_597_938n);
   });
 
   it("is monotonic: paying more for fewer tokens is a higher price", () => {
@@ -54,7 +109,10 @@ describe("priceFromTrade", () => {
   });
 
   it("uses a fixed scale that must not drift", () => {
-    expect(PRICE_SCALE).toBe(10n ** 18n);
+    // Changing this changes the meaning of every stored price row. It moved from 1e18
+    // to 1e27 once, on 2026-09-17, because 1e18 floored every price quoted in the
+    // 8-decimal asset to zero. A further change needs the same recompute.
+    expect(PRICE_SCALE).toBe(10n ** 27n);
   });
 });
 
@@ -66,7 +124,7 @@ describe("priceFromReserves", () => {
       pricingQuoteReserve: PHANTOM,
       tokenReserve: SUPPLY,
     });
-    expect(price).toBe(1_680_000_000n);
+    expect(price).toBe(1_680_000_000_000_000_000n);
   });
 
   it("rises as the token reserve is bought down", () => {
@@ -90,9 +148,10 @@ describe("priceFromReserves", () => {
 
 describe("marketCapFromPrice", () => {
   it("divides the price scale back out, giving quote base units", () => {
-    // Opening price 1.68e9 at 1e18 scale, times 1e27 supply, equals the 1.68 ETH
-    // the curve virtually opens against.
-    const cap = marketCapFromPrice(1_680_000_000n, SUPPLY);
+    // Opening price at 1e27 scale, times 1e27 supply, equals the 1.68 ETH the curve
+    // virtually opens against. The cap is INVARIANT under the scale change: the scale
+    // is divided back out, which is why no display call site had to move.
+    const cap = marketCapFromPrice(1_680_000_000_000_000_000n, SUPPLY);
     expect(cap).toBe(PHANTOM);
   });
 
@@ -102,13 +161,14 @@ describe("marketCapFromPrice", () => {
       tokenAmount: 366_037_735_849_056_603_773_584_905n,
     });
     const cap = marketCapFromPrice(price, SUPPLY);
-    // ~2.73 ETH implied cap after a 1 ETH buy.
-    expect(cap).toBe(2_731_958_762_000_000_000n);
+    // ~2.73 ETH implied cap after a 1 ETH buy. Carries the digits the old scale
+    // truncated: it used to read 2_731_958_762_000_000_000.
+    expect(cap).toBe(2_731_958_762_886_597_938n);
   });
 
   it("does not overflow at uint256-scale inputs", () => {
     const cap = marketCapFromPrice(10n ** 30n, 10n ** 30n);
-    expect(cap).toBe(10n ** 42n);
+    expect(cap).toBe(10n ** 33n);
   });
 
   it("returns zero for degenerate inputs", () => {

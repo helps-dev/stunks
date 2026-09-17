@@ -51,29 +51,27 @@ describe("formatCompact", () => {
 });
 
 describe("formatPrice", () => {
+  // The indexer stores prices at 1e27. These vectors are the same real prices as
+  // before, restated at that scale.
+  const SCALE = 10n ** 27n;
+
   it("keeps significant digits for a memecoin price", () => {
     // ~1.68e-9 ETH at launch. A fixed 2-decimal format would render this as "0.00".
-    // No trailing zero: formatUnitsExact trims it, and padding it back would imply
-    // precision the value does not carry.
-    expect(formatPrice(1_680_000_000n, 18)).toBe("0.00000000168");
+    expect(formatPrice(1_680_000_000n * 10n ** 9n, 18)).toBe("0.00000000168");
   });
 
   it("renders the verified trade price", () => {
     // 1 ETH bought 366,037,735,849,056,603,773,584,905 tokens.
-    expect(formatPrice(2_731_958_762n, 18)).toBe("0.000000002731");
+    expect(formatPrice(2_731_958_762n * 10n ** 9n, 18)).toBe("0.000000002731");
   });
 
   it("reads normally when the price is large", () => {
-    // For an 18-decimal token, priceScaled is already quote base units per whole
-    // token, so 1e18 is a price of exactly 1.
-    expect(formatPrice(ETH, 18)).toBe("1");
+    expect(formatPrice(SCALE, 18)).toBe("1");
   });
 
   it("respects a non-18-decimal token", () => {
-    // A 6-decimal token: 1e18 base units is 1e12 whole tokens, so the per-token price
-    // is 1e12 times smaller than the 18-decimal reading.
-    expect(formatPrice(ETH, 18, 4, 18)).toBe("1");
-    expect(formatPrice(ETH, 18, 4, 6)).not.toBe("1");
+    expect(formatPrice(SCALE, 18, 4, 18)).toBe("1");
+    expect(formatPrice(SCALE, 18, 4, 6)).not.toBe("1");
   });
 
   it("returns zero for a token that has never traded", () => {
@@ -81,10 +79,31 @@ describe("formatPrice", () => {
   });
 
   it("respects a non-18-decimal quote asset", () => {
-    // Same scaled price against USDG's 6 decimals is 1e12 times larger.
-    const usdg = formatPrice(1_680_000_000n, 6);
-    const eth = formatPrice(1_680_000_000n, 18);
+    // The same scaled price against USDG's 6 decimals is 1e12 times larger.
+    const usdg = formatPrice(1_680_000_000n * 10n ** 9n, 6);
+    const eth = formatPrice(1_680_000_000n * 10n ** 9n, 18);
     expect(usdg).not.toBe(eth);
+  });
+
+  it("reads a price the old 1e18 scale could not represent at all", () => {
+    // SATOSHI, quoted in the 8-decimal asset: 2,823 quote base units bought
+    // 540,440,857,263,784,622,848,790 token base units.
+    //
+    //   2823 * 1e18 / 5.4044e23 = 0.0052  -> floors to 0, and the UI showed "0"
+    //   2823 * 1e27 / 5.4044e23 = 5223890 -> a real number
+    //
+    // 124 of 124 tokens quoted in that asset were stored with price 0, including this
+    // one after 395 settled trades.
+    const priceAt1e27 = 5_223_890n;
+    expect(formatPrice(priceAt1e27, 8)).not.toBe("0");
+  });
+
+  it("is told the scale rather than assuming it", () => {
+    // A value stored under the old scale, read with the old exponent, is the same
+    // price as that value shifted up by 1e9 and read with the new one.
+    const legacy = formatPrice(1_680_000_000n, 18, 4, 18, 18);
+    const current = formatPrice(1_680_000_000n * 10n ** 9n, 18, 4, 18, 27);
+    expect(current).toBe(legacy);
   });
 });
 

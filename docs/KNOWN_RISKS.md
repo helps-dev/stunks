@@ -1001,3 +1001,62 @@ with a real cost, not something a process should do to itself at startup.
 
 **Until it is covered**, treat every aggregate the product displays — token counts,
 creator counts, total volume, trending — as covering roughly the last 1.5M blocks only.
+
+---
+
+## R40 — H — Every price quoted in the 8-decimal asset was stored as zero
+
+**Measured 2026-09-17 against the indexed database:**
+
+| quote decimals | tokens  | price = 0 |          |
+| -------------- | ------- | --------- | -------- |
+| 18             | 21,214  | 78        | 0.4%     |
+| 6              | 2,022   | 21        | 1.0%     |
+| **8**          | **124** | **124**   | **100%** |
+
+Every token quoted in the 8-decimal asset had a price of zero — including SATOSHI,
+after **395 settled trades**. Market cap follows price, so those tokens also carried a
+market cap of zero, sorted to the bottom of Explore, and displayed `0` on their own
+page.
+
+**Cause.** `PRICE_SCALE` was 1e18, and that scale is sized for the QUOTE asset, not the
+token. Fewer decimals in the quote leg means a numerically smaller `quoteAmount`
+against the same 1e18-scaled `tokenAmount`, and the integer quotient floors. SATOSHI's
+most recent sell moved 2,823 quote base units for 540,440,857,263,784,622,848,790 token
+base units:
+
+```
+2823 * 1e18 / 5.4044e23 = 0.0052   -> 0
+2823 * 1e27 / 5.4044e23 = 5223890  -> a real price
+```
+
+**Why nothing caught it.** This is not a float bug, so the lint rule that bans
+`Number()` and `parseFloat()` could not see it — it is integer truncation at a scale
+chosen for one asset and applied to all of them. The unit tests all used ETH vectors.
+The `inspect:indexed` integrity check _did_ report it, as `WARN every launch has an
+opening price (223 without)`, and that warning had been read as tokens that simply had
+not traded yet.
+
+**Fix.** `PRICE_SCALE` is now 1e27, which leaves an order of magnitude of headroom
+below the worst observed vector. `marketCapFromPrice` divides the same scale back out,
+so **market cap and volume keep their units and no display call site changed**. Only
+`price` itself gains resolution. `formatPrice` now takes the scale exponent rather than
+assuming 18 — a display off by 1e9 is not a rounding difference.
+
+**Migration required, and NOT performed.** `price` is a fixed-point integer whose scale
+is not stored beside it, so rows written under the old scale are not comparable with
+new ones. `scripts/recompute-prices.ts` restates them from `quoteAmount` and
+`tokenAmount`, which are untouched chain data:
+
+```bash
+pnpm recompute:prices -- --dry-run
+pnpm recompute:prices -- --apply
+```
+
+Stop the indexer first. Until it is run, prices are a mix of two scales.
+
+**Still open — cross-asset comparability.** `marketCap` and `volume` are denominated in
+each token's own quote asset, and Explore sorts and sums them together. A cap in
+8-decimal units and one in ETH base units are not comparable, and `totalVolume` adds
+them. The truncation is fixed; this is a separate product question about what a
+cross-asset market cap should mean, and it is not answered here.

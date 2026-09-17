@@ -88,12 +88,24 @@ export function applySlippageFloor(expectedOut: bigint, slippageBps: number): bi
 }
 
 /**
+ * Upper bound on a decimal exponent these helpers will accept.
+ *
+ * A sanity guard, not a capability limit: it exists to catch a wildly wrong exponent
+ * rather than to cap legitimate precision. It was 36, which was enough while prices
+ * were scaled by 1e18. `formatPrice` composes three exponents — quote decimals plus
+ * the price scale minus token decimals — and with the scale now 1e27 that reaches 39
+ * for a 6-decimal token against an 18-decimal quote. 48 leaves room for the composed
+ * range and still rejects nonsense.
+ */
+const MAX_DECIMALS = 48;
+
+/**
  * Parse a human decimal string into base units without ever touching a float.
  * Extra precision beyond `decimals` is truncated, matching how a chain would
  * treat it, rather than rounded.
  */
 export function parseUnitsExact(value: string, decimals: number): bigint {
-  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > MAX_DECIMALS) {
     throw new MoneyError(`parseUnitsExact: invalid decimals: ${decimals}`);
   }
   const trimmed = value.trim();
@@ -114,7 +126,7 @@ export function parseUnitsExact(value: string, decimals: number): bigint {
  * back into arithmetic.
  */
 export function formatUnitsExact(value: bigint, decimals: number): string {
-  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) {
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > MAX_DECIMALS) {
     throw new MoneyError(`formatUnitsExact: invalid decimals: ${decimals}`);
   }
   const negative = value < 0n;
