@@ -70,13 +70,16 @@ const ALLOWED_TYPES = new Set([
 const MAX_BYTES = 4 * 1024 * 1024;
 
 /**
- * One gateway's share of the budget.
+ * How long one gateway gets before the next is tried — except the last, which gets
+ * whatever remains of the budget.
  *
- * Measured, not guessed: `gateway.pinata.cloud` answers a cold CID in 4.5 seconds
- * fairly consistently. This was 4 seconds, which timed out just below that and made
- * the most reliable gateway look like the least.
+ * Measured, not guessed. This was 4 seconds, just under `gateway.pinata.cloud`'s
+ * typical 4.5, which made the most reliable gateway look like the least. Pinata has
+ * since been measured at 5–6.4 seconds on a 1.4 MB image, so no fixed slice short
+ * enough to leave room for a fallback will ever fit it — which is the point of
+ * trying a faster gateway first rather than waiting longer.
  */
-const ATTEMPT_TIMEOUT_MS = 5_500;
+const ATTEMPT_TIMEOUT_MS = 4_000;
 
 /**
  * Redirect hops followed per attempt.
@@ -161,7 +164,7 @@ async function attempt(
   startUrl: string,
   budgetMs: number,
 ): Promise<{ body: Uint8Array; type: string } | { reason: string }> {
-  const deadline = Date.now() + Math.min(ATTEMPT_TIMEOUT_MS, budgetMs);
+  const deadline = Date.now() + budgetMs;
   let url: string | null = fetchable(startUrl);
   if (url === null) return { reason: "unfetchable" };
 
@@ -244,7 +247,12 @@ export async function GET(request: Request): Promise<NextResponse> {
       reasons.push("budget-spent");
       break;
     }
-    const result = await attempt(candidate, remaining);
+    // The LAST candidate gets everything that is left, not a fixed slice. There is
+    // nothing to save it for, and a single-candidate URL — any image that is not on
+    // IPFS — would otherwise be cut off at the per-attempt limit while the budget
+    // still had seconds in it.
+    const isLast = candidate === candidates[candidates.length - 1];
+    const result = await attempt(candidate, isLast ? remaining : Math.min(ATTEMPT_TIMEOUT_MS, remaining));
     if ("body" in result) {
       return new NextResponse(result.body, {
         status: 200,

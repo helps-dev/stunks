@@ -230,7 +230,51 @@ export function normaliseImageUrl(raw: string): string | null {
     // never legitimate.
     if (!parsed.hostname.includes(".")) return null;
     if (parsed.username !== "" || parsed.password !== "") return null;
+
+    // A GATEWAY URL IS AN IPFS REFERENCE WEARING A HOSTNAME.
+    //
+    // Creators paste whatever their pinning service handed them, which is usually
+    // `https://<gateway>/ipfs/<cid>` rather than `ipfs://<cid>`. Kept as a plain URL
+    // it has exactly one place to be fetched from, and that place is often the
+    // slowest one: STUNKS' own token shipped
+    // `gateway.pinata.cloud/ipfs/QmRy4k…`, which served 1.4 MB in 5–6.4 seconds and
+    // timed out, while 4everland returned the identical 1,387,106 bytes in 1.2.
+    //
+    // Reducing it to the CID is safe precisely because IPFS is content-addressed —
+    // the CID is a hash of the bytes, so every gateway that answers returns the same
+    // image. This is the one case where swapping hosts cannot swap content.
+    const cid = gatewayCid(parsed);
+    if (cid !== null) return `ipfs://${cid}`;
+
     return parsed.toString();
+  }
+
+  return null;
+}
+
+/**
+ * The CID inside a gateway URL, in either shape gateways use:
+ *
+ *   https://gateway.pinata.cloud/ipfs/<cid>[/path]
+ *   https://<cid>.ipfs.4everland.io/[path]
+ *
+ * Returns null for anything else, including a path that merely contains "ipfs".
+ */
+function gatewayCid(url: URL): string | null {
+  const path = url.pathname.replace(/^\/+/, "");
+  if (path.startsWith("ipfs/")) {
+    const rest = path.slice("ipfs/".length);
+    const [head, ...tail] = rest.split("/");
+    if (head !== undefined && BARE_CID.test(head)) {
+      // A sub-path addresses a file inside a directory CID and must be kept.
+      return tail.length > 0 ? `${head}/${tail.join("/")}` : head;
+    }
+    return null;
+  }
+
+  const [subdomain, marker] = url.hostname.split(".");
+  if (marker === "ipfs" && subdomain !== undefined && BARE_CID.test(subdomain)) {
+    return path === "" ? subdomain : `${subdomain}/${path}`;
   }
 
   return null;

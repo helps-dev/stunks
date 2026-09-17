@@ -255,3 +255,54 @@ describe("imageFetchCandidates", () => {
     expect(imageFetchCandidates("ipfs://../secret")).toEqual([]);
   });
 });
+
+describe("gateway URLs are recognised as ipfs references", () => {
+  const CID = "QmRy4k3bjna32cMHYuAzRGNFAvHTPaNmUuwFoApHc236ds";
+
+  it("reduces a path-style gateway URL to its CID", () => {
+    // STUNKS' own token shipped exactly this. Kept as a URL it has one place to be
+    // fetched from, and that place served 1.4 MB in 6.4s and timed out; 4everland
+    // returned the identical bytes in 1.2s.
+    expect(normaliseImageUrl(`https://gateway.pinata.cloud/ipfs/${CID}`)).toBe(
+      `ipfs://${CID}`,
+    );
+    expect(normaliseImageUrl(`https://ipfs.io/ipfs/${CID}`)).toBe(`ipfs://${CID}`);
+  });
+
+  it("reduces a subdomain-style gateway URL to its CID", () => {
+    const b32 = "bafybeicncgrrp4u5lfwzwnbqutvzrsgtbondss7avd7s6ac4uo3vq5z5bq";
+    expect(normaliseImageUrl(`https://${b32}.ipfs.4everland.io/`)).toBe(`ipfs://${b32}`);
+  });
+
+  it("keeps a sub-path, which addresses a file inside a directory CID", () => {
+    expect(normaliseImageUrl(`https://gateway.pinata.cloud/ipfs/${CID}/logo.png`)).toBe(
+      `ipfs://${CID}/logo.png`,
+    );
+  });
+
+  it("gives a reduced gateway URL the full candidate list", () => {
+    const candidates = imageFetchCandidates(
+      normaliseImageUrl(`https://gateway.pinata.cloud/ipfs/${CID}`)!,
+    );
+    expect(candidates.length).toBeGreaterThan(1);
+    expect(candidates.some((url) => url.includes("4everland"))).toBe(true);
+  });
+
+  it("leaves an ordinary https image URL alone", () => {
+    // Not content-addressed: another host would be another image, so there is no
+    // safe fallback and none is invented.
+    expect(normaliseImageUrl("https://img.koyen.fun/pons_123.jpg")).toBe(
+      "https://img.koyen.fun/pons_123.jpg",
+    );
+    expect(imageFetchCandidates("https://img.koyen.fun/pons_123.jpg")).toHaveLength(1);
+  });
+
+  it("does not treat a path that merely mentions ipfs as a gateway", () => {
+    expect(normaliseImageUrl("https://example.com/ipfs/not-a-cid.png")).toBe(
+      "https://example.com/ipfs/not-a-cid.png",
+    );
+    expect(normaliseImageUrl("https://example.com/my-ipfs-photos/a.png")).toBe(
+      "https://example.com/my-ipfs-photos/a.png",
+    );
+  });
+});
