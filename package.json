@@ -24,6 +24,8 @@
     "inspect:indexed": "tsx --env-file-if-exists=.env scripts/inspect-indexed.ts",
     "moderate": "tsx --env-file-if-exists=.env scripts/moderate.ts",
     "recompute:prices": "tsx --env-file-if-exists=.env scripts/recompute-prices.ts",
+    "score:trending": "tsx --env-file-if-exists=.env scripts/score-trending.ts",
+    "prune:trades": "tsx --env-file-if-exists=.env scripts/prune-trades.ts",
     "prisma:migrate": "prisma migrate dev --schema prisma/schema.prisma",
     "prisma:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
     "prisma:studio": "prisma studio --schema prisma/schema.prisma",

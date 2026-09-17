@@ -183,9 +183,17 @@ model Token {
   @@unique([chainId, address])
   @@unique([chainId, curveAddress])
   // Explore and discovery query shapes.
-  @@index([chainId, phase, volume24h(sort: Desc)])
-  @@index([chainId, phase, marketCap(sort: Desc)])
   @@index([chainId, createdAt(sort: Desc)])
+  // Three indexes were removed on 2026-09-17 after pg_stat_user_indexes reported
+  // ZERO scans for each against 23,680 tokens and 434,523 trades:
+  //
+  //   trades  (traderAddress, timestamp)   41 MB  — nothing queries trades by wallet
+  //   tokens  (chainId, phase, marketCap)   2 MB  — Explore sorts without a phase
+  //   tokens  (chainId, phase, volume24h)   2 MB    predicate, so neither matched
+  //
+  // 45 MB on a 512 MB project, carried for queries that were never made. Restore the
+  // first if a wallet history page is ever added; restore the other two only with a
+  // phase filter, or the planner will ignore them again.
   @@index([chainId, trendingScore(sort: Desc)])
   @@index([chainId, phase, graduationBps(sort: Desc)])
   @@index([creatorId])
@@ -247,7 +255,6 @@ model Trade {
   // The idempotency key. This is what makes indexer restarts safe.
   @@unique([chainId, transactionHash, logIndex])
   @@index([tokenId, timestamp(sort: Desc)])
-  @@index([traderAddress, timestamp(sort: Desc)])
   @@index([tokenId, side, timestamp(sort: Desc)])
   @@index([chainId, blockNumber])
   @@index([timestamp(sort: Desc)])

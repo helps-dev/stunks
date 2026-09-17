@@ -1113,3 +1113,46 @@ then add a periodic job calling `scoreTrending` over the active cohort. Its inpu
 all derivable from `trades` — recent and prior window volume, distinct traders, trade
 count, buy and sell volume — except `priorMarketCap`, which wants the `VolumeSnapshot`
 table that exists in the schema and is not yet written.
+
+---
+
+## R42 — H — The free database tier holds about 19 hours of this chain
+
+Measured 2026-09-17, against the live database:
+
+|                    |                                       |
+| ------------------ | ------------------------------------- |
+| trades stored      | 441,390                               |
+| time they span     | **15.6 hours**                        |
+| rate               | 28,244 trades/hour                    |
+| space              | ~27.3 MB per hour of trades           |
+| Neon project limit | 512 MB                                |
+| therefore          | **~19 hours of trade history, total** |
+
+The whole database is under one day of chain activity. That reframes several things
+that looked like separate problems:
+
+- **A retention policy measured in days cannot work.** A 7-day window matches nothing,
+  because no trade survives long enough to reach 7 days old. Only a window shorter than
+  what fits — hours, not days — frees anything, and `prune:trades` now says so rather
+  than reporting zero without explanation.
+- **Trending needs two comparable windows.** At 19 hours of capacity that is at most
+  two 8-hour windows, which is thin but workable; `score:trending --window 8` is the
+  honest setting on this tier.
+- **R39 is not reachable from here.** Covering the ~38M unindexed blocks would need
+  roughly 25× the current data. That is tens of gigabytes, not a bigger free tier.
+- **Retention and backfill are mutually exclusive.** Retention is measured against the
+  wall clock, so recovered history arrives already expired and is deleted on the next
+  run.
+
+**What was done.** Three never-scanned indexes were dropped (45 MB, about 1.6 hours of
+headroom — see the migration for the measurements). `prune:trades` deletes old trades
+while exempting the top tokens by trending score, and keeps every token row, because
+tokens are 27 MB against trades' 426 MB and are what every page and link depends on.
+
+**What was not done, and cannot be.** Made this fit. 27 MB/hour against a 512 MB
+ceiling is arithmetic, and no retention policy changes it. The options are a database
+sized for the data, or storing aggregates instead of raw trades — `VolumeSnapshot` and
+`Candle` exist in the schema for exactly that and are still unwritten. Keeping a short
+window of raw trades behind hourly aggregates would cut the per-hour cost by orders of
+magnitude and is the design the schema already anticipates.
