@@ -201,12 +201,26 @@ counts, so it binds to loopback. `HEALTH_HOST` is what enforces that — a port
 number never restricted a binding — and it is overridden to `0.0.0.0` only inside
 the container, where the `127.0.0.1:9464:9464` mapping does the same job.
 
-**If the curve stream is falling behind**, the constraint is almost always the
-free public RPC endpoints, which both streams share. Measured on 2026-09-17: dRPC
-had 5,314 recorded failures and was marked unhealthy, OrdoFi 4,975, and the curve
-stream had made no progress for ten minutes with `eth_getLogs` failing at both.
+**If the curve stream is falling behind**, the constraint is the free public RPC
+endpoints, which both streams share. Measured on 2026-09-17, with both streams
+running: the factory needs ~9.9 blocks/second simply to keep pace with the chain,
+and the two free endpoints deliver roughly 12.8 blocks/second between them. The
+curve stream gets what is left, which is about 3 blocks/second — so a backlog of
+900,000 blocks does not shrink. That arithmetic is not something scheduling can
+fix.
 
-In order of effect:
+Before reaching for capacity, check the two failure modes that look identical to
+being slow but are not:
+
+- **A stream frozen at one block** while the other advances. The checkpoint does
+  not move at all and `lastSuccessAt` is hours old. This was R34: one endpoint's
+  error string was classified as non-retryable, so the pool gave up without trying
+  the other. Fixed, and the taxonomy now fails in the retryable direction.
+- **`log range narrowed, retrying` on a large share of ticks.** Each one scanned
+  nothing. This was R35: the sizer kept rediscovering a limit that had not moved.
+  Fixed; after a cold start expect about five narrowings per stream and then none.
+
+If neither applies, it is genuinely capacity. In order of effect:
 
 1. **Use HyperSync for the backfill.** `BACKFILL_SOURCE=hypersync` with a free
    token from [app.envio.dev](https://app.envio.dev/api-tokens). RPC backfill of
@@ -220,6 +234,22 @@ In order of effect:
 
 Until the curve stream is current, the UI says so: the freshness banner reports
 the **slowest** stream, not the fastest, and names which one it is.
+
+### Moderation
+
+`ExploreRepository` hides `HIDDEN` and `FLAGGED` tokens from every listing. The
+lever for setting them is a script, deliberately paired with an audit row:
+
+```bash
+pnpm moderate -- --list HIDDEN
+pnpm moderate -- --token 0x… --status HIDDEN --actor 0x… --reason "impersonates USDC"
+```
+
+Anyone can deploy a token called `USDC` on an open launchpad, and STUNKS renders
+whatever name the chain reports. This changes only whether STUNKS lists a token —
+never the token, the curve, or anyone's balance. The status change and its audit
+row are written in one transaction, because a moderation action without a record
+of who took it is the state this is meant to prevent.
 
 ---
 

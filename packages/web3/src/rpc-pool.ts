@@ -103,8 +103,8 @@ const defaultSleep = (ms: number): Promise<void> =>
  *
  * The message wins because it is the actionable part: "ranges over 10000 blocks are
  * not supported" tells the caller to narrow, where the accompanying HTTP 400 does not.
- * The status is still the fallback so that an unhelpful error delivered with a 429
- * stays retryable rather than becoming a permanent RPC_ERROR.
+ * The status is still consulted so that an unhelpful error delivered with a 429 is
+ * recorded as rate limiting rather than as a generic unknown.
  */
 function classifyWithStatus(
   message: string,

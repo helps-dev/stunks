@@ -79,6 +79,13 @@ export interface ScanTickResult {
   readonly toBlock: bigint;
   readonly caughtUp: boolean;
   readonly reorged: boolean;
+  /**
+   * Highest block this tick considered settled, or null when the head could not be
+   * read. Exposed so a caller can measure how far behind a stream is in absolute
+   * terms — `caughtUp` only says whether it landed exactly on the boundary, which
+   * under RPC pressure is rarely true even for a stream a few seconds from the head.
+   */
+  readonly confirmedHead: bigint | null;
 }
 
 export class Scanner {
@@ -112,6 +119,7 @@ export class Scanner {
         toBlock: checkpoint.lastProcessedBlock,
         caughtUp: true,
         reorged: false,
+        confirmedHead: null,
       };
     }
 
@@ -129,6 +137,7 @@ export class Scanner {
         toBlock: checkpoint.lastProcessedBlock,
         caughtUp: false,
         reorged: true,
+        confirmedHead: null,
       };
     }
 
@@ -165,6 +174,7 @@ export class Scanner {
         toBlock: checkpoint.lastProcessedBlock,
         caughtUp: true,
         reorged: false,
+        confirmedHead: confirmed,
       };
     }
 
@@ -181,6 +191,7 @@ export class Scanner {
         toBlock: checkpoint.lastProcessedBlock,
         caughtUp: true,
         reorged: false,
+        confirmedHead: confirmed,
       };
     }
 
@@ -207,6 +218,7 @@ export class Scanner {
           toBlock: checkpoint.lastProcessedBlock,
           caughtUp: false,
           reorged: false,
+          confirmedHead: confirmed,
         };
       }
       return this.handleSourceFailure(fromBlock, checkpoint.lastProcessedBlock, error);
@@ -223,6 +235,7 @@ export class Scanner {
         toBlock: checkpoint.lastProcessedBlock,
         caughtUp: false,
         reorged: false,
+        confirmedHead: confirmed,
       };
     }
 
@@ -309,6 +322,7 @@ export class Scanner {
       toBlock: reached,
       caughtUp: reached >= boundary,
       reorged: false,
+      confirmedHead: confirmed,
     };
   }
 
@@ -336,6 +350,7 @@ export class Scanner {
       toBlock: lastProcessedBlock,
       caughtUp: false,
       reorged: false,
+      confirmedHead: null,
     };
   }
 
@@ -370,6 +385,7 @@ export class Scanner {
       toBlock: lastProcessedBlock,
       caughtUp: false,
       reorged: false,
+      confirmedHead: null,
     };
   }
 

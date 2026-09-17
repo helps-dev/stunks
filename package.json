@@ -21,6 +21,7 @@
     "probe:sources": "tsx scripts/probe-log-sources.ts",
     "verify:db": "tsx scripts/verify-database.ts",
     "inspect:indexed": "tsx scripts/inspect-indexed.ts",
+    "moderate": "tsx scripts/moderate.ts",
     "prisma:migrate": "prisma migrate dev --schema prisma/schema.prisma",
     "prisma:deploy": "prisma migrate deploy --schema prisma/schema.prisma",
     "prisma:studio": "prisma studio --schema prisma/schema.prisma",

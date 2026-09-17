@@ -23,6 +23,25 @@ export type RpcFailureKind =
   | "TIMEOUT"
   | "NETWORK"
   | "HTTP_ERROR"
+  /**
+   * Positively identified as the caller's fault: a revert, a bad parameter, an
+   * unknown method. Every endpoint will answer this identically, so trying another
+   * one is pure waste.
+   */
+  | "DETERMINISTIC_ERROR"
+  /**
+   * An error this taxonomy does not recognise.
+   *
+   * Retryable, deliberately. This is the fallback bucket, and a bucket that means
+   * "we do not know what this is" must not also assert "every endpoint would say the
+   * same thing" — across a pool of heterogeneous third-party providers that assertion
+   * is usually false, and when it is wrong it is expensive.
+   *
+   * It was non-retryable once. OrdoFi returned "all RPC upstreams refused the request
+   * — fetch failed", which matched nothing, landed here, and so the pool threw on the
+   * first endpoint without ever trying the second. The curve stream stopped for seven
+   * hours while dRPC answered the identical query in 293 ms.
+   */
   | "RPC_ERROR";
 
 export class RpcCallError extends Error {
@@ -134,9 +153,13 @@ export function isRetryable(kind: RpcFailureKind): boolean {
     // the pool records the rejected size so the same endpoint is not asked again.
     case "BATCH_TOO_LARGE":
       return true;
+    // An unrecognised provider error. Worth asking someone else — see the note on
+    // the RPC_ERROR variant for what assuming otherwise cost.
+    case "RPC_ERROR":
+      return true;
     // A revert or a bad parameter will fail identically everywhere, and a range
     // that is too wide needs the caller to split it, not a different endpoint.
-    case "RPC_ERROR":
+    case "DETERMINISTIC_ERROR":
     case "LOG_RANGE_TOO_WIDE":
       return false;
   }
@@ -157,11 +180,36 @@ const BLOCK_UNAVAILABLE_PATTERNS = [
 ];
 
 const UPSTREAM_UNAVAILABLE_PATTERNS = [
-  // OrdoFi has returned both forms while its eth_getLogs backend is overloaded. They
-  // are not caller mistakes: retrying a smaller range cannot make a one-block query
-  // acceptable, and a different provider can serve the same query.
+  // OrdoFi has returned all three forms while its eth_getLogs backend is overloaded.
+  // They are not caller mistakes: retrying a smaller range cannot make a one-block
+  // query acceptable, and a different provider can serve the same query.
   /\bnetwork is busy,? please try again\b/i,
   /\bblock\s+\d+\s+alone returns more logs than the upstream will serve\b/i,
+  // The third form, and the costly one. OrdoFi is itself a proxy, so this says its
+  // own upstreams are unavailable — which is the textbook reason to try a different
+  // endpoint. Falling through to RPC_ERROR instead made it NON-retryable, so the pool
+  // threw on the first endpoint and never tried the second.
+  //
+  // Measured cost, 2026-09-17: the curve stream sat on the same block for seven hours
+  // with this as its recorded error, while dRPC answered the identical 100-block query
+  // in 293 ms. One unmatched string, one frozen stream, one healthy endpoint unused.
+  /\ball RPC upstreams refused the request\b/i,
+];
+
+/**
+ * Errors that genuinely will not change with the endpoint.
+ *
+ * This list has to be positive rather than a fallback: anything not named here is
+ * treated as possibly-transient and tried elsewhere, which is the safe direction to
+ * be wrong in. A wasted retry costs one request; a misclassified transient error
+ * costs the whole stream.
+ */
+const DETERMINISTIC_PATTERNS = [
+  /\bexecution reverted\b/i,
+  /\binvalid params?\b/i,
+  /\bmethod not found\b/i,
+  /\bmethod .+ (is )?not (supported|available)\b/i,
+  /\binvalid argument\b/i,
 ];
 
 const BATCH_TOO_LARGE_PATTERNS = [
@@ -212,5 +260,9 @@ export function classifyRpcErrorMessage(message: string): RpcFailureKind {
   if (RATE_LIMIT_PATTERNS.some((pattern) => pattern.test(message))) {
     return "RATE_LIMITED";
   }
+  if (DETERMINISTIC_PATTERNS.some((pattern) => pattern.test(message))) {
+    return "DETERMINISTIC_ERROR";
+  }
+  // Unrecognised, and therefore retryable. See the RpcFailureKind note.
   return "RPC_ERROR";
 }

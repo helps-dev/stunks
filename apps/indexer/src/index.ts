@@ -371,9 +371,29 @@ async function main(): Promise<void> {
   // scans of headroom before the factory speeds up again.
   const FACTORY_SLACK_BLOCKS = 50_000n;
   const FACTORY_BACKOFF_MULTIPLIER = 10;
+  /**
+   * How close to the head counts as "the factory has runway to spare".
+   *
+   * `caughtUp` means the factory reached the confirmed head EXACTLY on its last tick,
+   * and under RPC pressure that is almost never true — a tick that fails, narrows or
+   * lands a few hundred blocks short reports false. Measured on 2026-09-17: the
+   * factory sat 831 blocks behind (~84 seconds) while the curve stream was 899,726
+   * blocks behind (~25 hours), and because 831 > 0 the factory never yielded any
+   * budget to the stream that actually needed it.
+   *
+   * So the test is absolute, not exact — but it also has to stay tight, because the
+   * factory settles wherever this threshold puts it. This IS the delay before a new
+   * launch appears on the site, and on a launchpad that delay is the product. 2,000
+   * blocks is about three and a half minutes: loose enough that a factory a few
+   * hundred blocks back still yields budget, tight enough that a launch is never
+   * more than a few minutes old, and a factory genuinely falling behind still
+   * cancels its own backoff — the property the previous fix existed to preserve.
+   */
+  const FACTORY_NEAR_HEAD_BLOCKS = 2_000n;
   let factoryBlock = 0n;
   let curveBlock = 0n;
   let factoryAtHead = false;
+  let factoryLag: bigint | null = null;
   let backedOff = false;
 
   const factoryInterval = (): number => {
@@ -384,7 +404,10 @@ async function main(): Promise<void> {
     // the factory off the head it stayed throttled to a tenth of its rate and lost
     // ground to chain production without bound, ending 212,551 blocks behind. Falling
     // behind the head now cancels the backoff by itself.
-    const shouldBackOff = factoryAtHead && slack > FACTORY_SLACK_BLOCKS;
+    // Near the head, not necessarily exactly at it. See FACTORY_NEAR_HEAD_BLOCKS.
+    const factoryNearHead =
+      factoryAtHead || (factoryLag !== null && factoryLag <= FACTORY_NEAR_HEAD_BLOCKS);
+    const shouldBackOff = factoryNearHead && slack > FACTORY_SLACK_BLOCKS;
     if (shouldBackOff !== backedOff) {
       backedOff = shouldBackOff;
       log(
@@ -396,6 +419,7 @@ async function main(): Promise<void> {
           curveBlock: curveBlock.toString(),
           slackBlocks: slack.toString(),
           factoryAtHead,
+          factoryLagBlocks: factoryLag?.toString() ?? null,
           intervalMs: shouldBackOff
             ? config.TAIL_INTERVAL_MS * FACTORY_BACKOFF_MULTIPLIER
             : config.TAIL_INTERVAL_MS,
@@ -414,6 +438,12 @@ async function main(): Promise<void> {
       // truthful when the source is unavailable.
       factoryBlock = r.toBlock;
       factoryAtHead = r.caughtUp;
+      // Only when the head was actually read. A tick that could not reach the source
+      // says nothing about the distance to the head, so the previous measurement is
+      // the best available answer and is kept rather than being reset to "unknown".
+      if (r.confirmedHead !== null) {
+        factoryLag = r.confirmedHead > r.toBlock ? r.confirmedHead - r.toBlock : 0n;
+      }
       formatTick("factory", r);
     }),
     scanners[1]!.tail(config.TAIL_INTERVAL_MS, (r) => {

@@ -119,8 +119,11 @@ describe("log range errors", () => {
   });
 
   it("marks a revert as non-retryable", () => {
-    expect(isRetryable("RPC_ERROR")).toBe(false);
+    expect(isRetryable("DETERMINISTIC_ERROR")).toBe(false);
     expect(isRetryable("LOG_RANGE_TOO_WIDE")).toBe(false);
+    // The fallback bucket is retryable: "unrecognised" must not imply "everyone
+    // would answer the same".
+    expect(isRetryable("RPC_ERROR")).toBe(true);
     expect(isRetryable("NON_JSON_RESPONSE")).toBe(true);
     expect(isRetryable("RATE_LIMITED")).toBe(true);
   });
@@ -255,11 +258,113 @@ describe("adaptive log window", () => {
     expect(window.onRejected()).toBe(10n);
   });
 
-  it("grows on success but respects the ceiling", () => {
+  it("grows on success but respects the configured maximum", () => {
     const window = new AdaptiveLogWindow(100n, 10n, 130n);
     expect(window.onSuccess()).toBe(126n);
     expect(window.onSuccess()).toBe(130n);
     expect(window.onSuccess()).toBe(130n);
+  });
+
+  /**
+   * The oscillation these tests exist to stop.
+   *
+   * dRPC's free plan rejects anything over 100 blocks while its message claims the
+   * limit is 10,000. Pure additive-increase relearned that every cycle — grow to 126,
+   * rejected, halve to 63, climb back — spending roughly one tick in four on a limit
+   * that had not moved, and averaging a window near 85 instead of 100.
+   */
+  it("searches between the best known-good span and the bound, not from zero", () => {
+    const window = new AdaptiveLogWindow(100n, 10n, 10_000n);
+
+    // Overshoot once, exactly as it did against dRPC.
+    expect(window.onSuccess()).toBe(126n);
+    // 100 is known to work, so a rejection at 126 does not throw that away and halve
+    // to 63 — it steps to the midpoint. Discarding proven capacity was most of the
+    // cost of the old behaviour.
+    expect(window.onRejected()).toBe(113n);
+    expect(window.knownCeiling()).toBe(126n);
+  });
+
+  it("converges on a hard limit and then stops moving", () => {
+    // A provider whose real ceiling is exactly 100, like dRPC's free plan.
+    const REAL_LIMIT = 100n;
+    const window = new AdaptiveLogWindow(100n, 10n, 10_000n);
+
+    let rejections = 0;
+    for (let i = 0; i < 60; i++) {
+      if (window.current() > REAL_LIMIT) {
+        window.onRejected();
+        rejections += 1;
+      } else {
+        window.onSuccess();
+      }
+    }
+
+    // Bracketed quickly rather than cycling forever.
+    expect(rejections).toBeLessThanOrEqual(8);
+    expect(window.settled()).toBe(true);
+    // And settled ON the limit, not below it.
+    expect(window.current()).toBe(REAL_LIMIT);
+
+    // Stable from here: no further rejection is provoked.
+    const before = rejections;
+    for (let i = 0; i < 100; i++) {
+      if (window.current() > REAL_LIMIT) {
+        window.onRejected();
+        rejections += 1;
+      } else {
+        window.onSuccess();
+      }
+    }
+    expect(rejections).toBe(before);
+  });
+
+  it("believes the lowest rejection it has seen", () => {
+    const window = new AdaptiveLogWindow(200n, 10n, 10_000n);
+    window.onRejected();
+    expect(window.knownCeiling()).toBe(200n);
+
+    const w2 = new AdaptiveLogWindow(80n, 10n, 10_000n);
+    w2.onRejected();
+    expect(w2.knownCeiling()).toBe(80n);
+  });
+
+  it("re-probes occasionally so a raised plan limit is rediscovered", () => {
+    const window = new AdaptiveLogWindow(100n, 10n, 10_000n);
+    window.onSuccess();
+    window.onRejected();
+    // Settle the search first.
+    for (let i = 0; i < 20; i++) window.onSuccess();
+    expect(window.settled()).toBe(true);
+    const settledSpan = window.current();
+
+    // Eventually it spends one tick asking again above the settled span. A limit is
+    // a plan setting, so a one-way ratchet would strand the indexer on an old plan.
+    let probed = false;
+    for (let i = 0; i < 400 && !probed; i++) {
+      if (window.onSuccess() > settledSpan) probed = true;
+    }
+    expect(probed).toBe(true);
+  });
+
+  it("forgets a stale ceiling once a span at that size succeeds", () => {
+    const window = new AdaptiveLogWindow(100n, 10n, 10_000n);
+    window.onSuccess();
+    window.onRejected();
+    expect(window.knownCeiling()).toBe(126n);
+    for (let i = 0; i < 20; i++) window.onSuccess();
+
+    const settledSpan = window.current();
+    let probed = false;
+    for (let i = 0; i < 400 && !probed; i++) {
+      if (window.onSuccess() > settledSpan) probed = true;
+    }
+    expect(probed).toBe(true);
+
+    // The probe was not rejected, so the bound is dropped and growth resumes.
+    window.onSuccess();
+    expect(window.knownCeiling()).toBeNull();
+    expect(window.settled()).toBe(false);
   });
 });
 
@@ -298,14 +403,14 @@ describe("provider head disagreement", () => {
     });
   });
 
-  it("classifies only the observed missing-block message as retryable", () => {
+  it("keeps the retry contract for the observed missing-block message", () => {
     expect(
       isRetryable(
         // Classification is exercised via pool above; this guards the retry contract.
         "BLOCK_UNAVAILABLE",
       ),
     ).toBe(true);
-    expect(isRetryable("RPC_ERROR")).toBe(false);
+    expect(isRetryable("DETERMINISTIC_ERROR")).toBe(false);
   });
 
   it("fails over when a lagging endpoint returns a null block instead of an error", async () => {
@@ -360,6 +465,10 @@ describe("overloaded upstream log providers", () => {
   it.each([
     "the network is busy, please try again in a moment",
     "eth_getLogs: block 63961375 alone returns more logs than the upstream will serve. Add an address or topic filter.",
+    // The one that froze the curve stream for seven hours on 2026-09-17. OrdoFi is
+    // itself a proxy, so this reports ITS upstreams as unavailable — the textbook
+    // reason to ask a different endpoint.
+    "all RPC upstreams refused the request — fetch failed",
   ])(
     "fails over instead of shrinking an inherently unsupportable query: %s",
     async (message) => {
@@ -390,4 +499,60 @@ describe("overloaded upstream log providers", () => {
       expect(pool.stats()[0]?.lastErrorKind).toBe("UPSTREAM_UNAVAILABLE");
     },
   );
+
+  /**
+   * The class of bug, not just the instance.
+   *
+   * Adding a pattern fixes one string. The reason one string could freeze a stream is
+   * that the fallback bucket asserted "every endpoint will answer this identically",
+   * which for a pool of third-party providers is usually false. These two tests pin
+   * the inverted default so the next unrecognised provider message costs a retry
+   * rather than an outage.
+   */
+  it("tries the next endpoint on an error it does not recognise", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          jsonrpc: "2.0",
+          id: 1,
+          error: { code: -32000, message: "sharding backend wedged, code 7" },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ jsonrpc: "2.0", id: 2, result: [] }));
+
+    const pool = new RpcPool(["https://weird.example", "https://healthy.example"], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      attemptsPerEndpoint: 1,
+      sleep: noSleep,
+    });
+
+    await expect(pool.request<readonly unknown[]>("eth_getLogs", [])).resolves.toEqual(
+      [],
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(pool.stats()[0]?.lastErrorKind).toBe("RPC_ERROR");
+  });
+
+  it("does not spend the pool on an error that is genuinely the caller's", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse({
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32000, message: "execution reverted" },
+      }),
+    );
+
+    const pool = new RpcPool(["https://a.example", "https://b.example"], {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      attemptsPerEndpoint: 1,
+      sleep: noSleep,
+    });
+
+    const failure = await pool.request("eth_call", []).catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(RpcCallError);
+    expect((failure as RpcCallError).kind).toBe("DETERMINISTIC_ERROR");
+    // One endpoint, not two: a revert is the same answer everywhere.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });

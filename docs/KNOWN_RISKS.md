@@ -788,3 +788,87 @@ Two consequences were already in the tree:
 schema check and the build on every push and pull request, with a weekly dependency
 audit. `apps/web` has a `test` script and a vitest config; the repository is formatted.
 Test count went from 314 across 6 workspaces to 333 across 7.
+
+---
+
+## R34 — RESOLVED — One unrecognised error string froze the curve stream for seven hours
+
+**Observed 2026-09-17.** The curve stream's checkpoint had not moved since 00:37. Its
+recorded error was:
+
+```
+[RPC_ERROR] eth_getLogs via https://rpc.ordofi.network:
+  all RPC upstreams refused the request — fetch failed
+```
+
+Note the single endpoint. dRPC was never tried — and dRPC answered the identical
+100-block query in 293 ms when probed directly.
+
+**Root cause, and it is a taxonomy problem rather than a capacity one.** OrdoFi is
+itself a proxy, so that message reports _its_ upstreams as unavailable. It matched none
+of the classification patterns, so it fell through to `RPC_ERROR` — and `RPC_ERROR` was
+non-retryable, on the reasoning that "a revert or a bad parameter will fail identically
+everywhere". That reasoning is right for reverts. It is wrong for the _fallback bucket_,
+because a bucket meaning "we do not recognise this" must not also assert "every endpoint
+would answer the same way". Across heterogeneous third-party providers that assertion is
+usually false, and when it is wrong the pool abandons healthy endpoints.
+
+**Fix, at the level of the class rather than the instance.** The default is inverted:
+`RPC_ERROR` is now retryable, and a new `DETERMINISTIC_ERROR` carries the positively
+identified cases — `execution reverted`, `invalid params`, `method not found` — that
+genuinely will not change with the endpoint. Being wrong in the retryable direction
+costs one extra request; being wrong the other way cost seven hours. The OrdoFi string
+is also matched explicitly as `UPSTREAM_UNAVAILABLE`.
+
+**Effect:** curve stream 0 → ~3-4 blocks/second, health `degraded` → `ok`.
+
+---
+
+## R35 — RESOLVED — The log-window sizer relearned the same limit forever
+
+dRPC's free plan rejects `eth_getLogs` ranges over **100 blocks**, while the rejection
+message says _"ranges over 10000 blocks are not supported on free plan"_. The true limit
+was established by binary search, not by reading the message.
+
+The sizer used additive-increase / multiplicative-decrease with no memory, so against a
+hard limit it cycled forever: 100 succeeds, grow to 126, rejected, halve to 63, climb
+79, 99, 124, rejected. Measured in the running indexer, roughly **one tick in four**
+scanned nothing, and the average window sat near 85 instead of 100. On a stream that
+cannot keep pace with the chain, a quarter of every tick is not a rounding error.
+
+**Fix.** The sizer now holds the largest span known to succeed and the smallest known to
+fail, and steps to the midpoint — a binary search that converges and then stops. A
+rejection no longer discards proven capacity: with 100 known good, a rejection at 126
+steps to 113, not down to 63.
+
+Measured after the change, from a cold start: the search went 126 → 113 → 106 → 103 →
+102 per stream, five rejections, then **zero narrowings in the next 40 ticks**. A rare
+re-probe keeps it from becoming a one-way ratchet, since a provider limit is a plan
+setting rather than a law.
+
+---
+
+## R36 — RESOLVED (partially) — The factory never yielded RPC budget under pressure
+
+The two streams share one pool of free endpoints, and the factory was meant to back off
+when it had runway to spare so the curve stream could use the budget. The condition was
+`factoryAtHead && slack > 50_000`, where `factoryAtHead` meant the last tick reached the
+confirmed head _exactly_.
+
+Under RPC pressure that is almost never true — a tick that fails, narrows, or lands a
+few hundred blocks short reports false. Measured 2026-09-17: the factory sat 831 blocks
+behind (~84 seconds) while the curve stream was 899,726 blocks behind (~25 hours), and
+because 831 > 0 the factory never yielded anything.
+
+**Fix.** The test is absolute rather than exact: the factory backs off when it is within
+2,000 blocks (~3.4 minutes) of the head. That threshold is also the delay before a new
+launch appears on the site, which is why it is tight rather than generous. A factory
+genuinely falling behind still cancels its own backoff, which is the property the
+previous fix existed to preserve.
+
+**Partially resolved, and the remainder is not a code problem.** With both streams
+running, the factory needs ~9.9 blocks/second simply to keep pace with the chain, and
+the two free endpoints deliver roughly 12.8 blocks/second in total. The curve stream
+therefore gets about 3 blocks/second and, being ~900,000 blocks behind, will not catch
+up. No scheduling change fixes that arithmetic. See **R3**: the backfill needs HyperSync
+or a paid endpoint.
