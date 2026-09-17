@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import {
   useAccount,
   useBalance,
@@ -32,41 +33,120 @@ interface ConnectWalletProps {
 export function ConnectWallet({ compact = false }: ConnectWalletProps) {
   const { address, isConnected } = useAccount();
   const chainId = useChainId();
-  const { connect, connectors, isPending, error } = useConnect();
+  const { connect, connectors, isPending, error, variables } = useConnect();
   const { disconnect } = useDisconnect();
   const { switchChain, isPending: isSwitching } = useSwitchChain();
   const { data: balance } = useBalance({ address });
+  const [picking, setPicking] = useState(false);
 
-  const injected = connectors[0];
+  /**
+   * Every wallet on offer, de-duplicated.
+   *
+   * wagmi lists one connector per EIP-6963 wallet the browser announces, plus the ones
+   * configured by hand. A browser with several wallets installed can also announce the
+   * same one twice — once discovered, once as the generic `injected` fallback — so
+   * entries are keyed by name and the discovered copy wins.
+   *
+   * This replaces `connectors[0]`, which connected to whichever wallet wagmi happened
+   * to list first. On a machine with many extensions that is a coin toss, and when it
+   * chose one the user was not using, the failure surfaced as "Wallet connection
+   * failed" with no indication that the wrong wallet had been asked.
+   */
+  const available = useMemo(() => {
+    const byName = new Map<string, (typeof connectors)[number]>();
+    for (const connector of connectors) {
+      const existing = byName.get(connector.name);
+      // A discovered wallet carries its own icon; prefer it over the bare fallback.
+      if (!existing || (!existing.icon && connector.icon)) {
+        byName.set(connector.name, connector);
+      }
+    }
+    return [...byName.values()];
+  }, [connectors]);
+
   const wrongChain = isConnected && chainId !== ROBINHOOD_CHAIN_ID;
+  const pendingName = isPending ? variables?.connector?.name : undefined;
 
   if (!isConnected) {
+    const none = available.length === 0;
+
     return (
       <div className={compact ? "wallet wallet-compact" : "wallet"}>
         <button
           type="button"
           className="btn btn-primary btn-wallet"
-          disabled={isPending || !injected}
-          onClick={() => injected && connect({ connector: injected })}
+          disabled={isPending || none}
+          aria-expanded={picking}
+          onClick={() => setPicking((open) => !open)}
         >
-          {isPending ? "Check wallet…" : "Connect wallet"}
+          {isPending
+            ? `Check ${pendingName ?? "wallet"}…`
+            : picking
+              ? "Choose a wallet"
+              : "Connect wallet"}
         </button>
-        {!compact && !injected && (
+
+        {picking && !none && (
+          <ul className="wallet-picker" role="list">
+            {available.map((connector) => (
+              <li key={connector.uid}>
+                <button
+                  type="button"
+                  className="wallet-option"
+                  disabled={isPending}
+                  onClick={() => {
+                    setPicking(false);
+                    connect({ connector });
+                  }}
+                >
+                  {connector.icon ? (
+                    // A plain <img>, not next/image: the wallet supplies this over
+                    // EIP-6963 as a data URI, which the image optimiser cannot process
+                    // and does not need to.
+                    <img src={connector.icon} alt="" width={20} height={20} />
+                  ) : (
+                    <span className="wallet-option-blank" aria-hidden="true" />
+                  )}
+                  <span>{connector.name}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {none && !compact && (
           <p className="hint">
-            No browser wallet detected. Install one to launch or trade.
+            No wallet detected. Install a browser wallet, or set
+            NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID to offer phone wallets.
           </p>
         )}
-        {compact && !injected && (
+        {none && compact && (
           <span className="wallet-compact-note" role="status">
             No wallet detected
           </span>
         )}
-        {!compact && error && <p className="hint error-text">{error.message}</p>}
-        {compact && error && (
-          <span className="wallet-compact-note wallet-compact-error" role="status">
-            Wallet connection failed
+
+        {/*
+          The real message, not a generic one. "Wallet connection failed" told the user
+          nothing they could act on — a rejected request, a locked wallet and a wrong
+          network all produced the same four words.
+        */}
+        {error && !compact && (
+          <p className="hint error-text">
+            {pendingName ? `${pendingName}: ` : ""}
+            {error.message}
+          </p>
+        )}
+        {error && compact && (
+          <span
+            className="wallet-compact-note wallet-compact-error"
+            role="status"
+            title={error.message}
+          >
+            {error.message.slice(0, 60)}
           </span>
         )}
+
         {!compact && (
           <p className="hint">
             STUNKS never asks for a private key or seed phrase, and cannot move your

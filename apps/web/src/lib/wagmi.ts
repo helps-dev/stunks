@@ -1,13 +1,28 @@
 import { createConfig, fallback, http } from "wagmi";
-import { injected } from "wagmi/connectors";
+import { coinbaseWallet, injected, walletConnect } from "wagmi/connectors";
 import { KNOWN_RPC_ENDPOINTS, ROBINHOOD_CHAIN_ID, robinhoodChain } from "@stunks/config";
 
 /**
  * Wallet configuration.
  *
- * Deliberately narrow: `injected` only. STUNKS is non-custodial, so the wallet holds
- * the keys and STUNKS never sees them. Adding WalletConnect or a hosted signer later
- * is additive; starting with the smallest surface keeps that promise easy to audit.
+ * STUNKS is non-custodial: the wallet holds the keys, STUNKS never sees them, and it
+ * never signs on anyone's behalf. Every connector here preserves that — none of them
+ * is a hosted signer.
+ *
+ * WHAT IS OFFERED, AND WHY EACH
+ *
+ *   discovered wallets  Every browser extension that announces itself over EIP-6963.
+ *                       wagmi finds them automatically, so a browser with ten wallets
+ *                       installed offers ten. This is the important one, and it used
+ *                       to be squandered: the UI took `connectors[0]` and connected to
+ *                       whichever wagmi happened to list first, which on a machine
+ *                       with many extensions is a coin toss and reported the result as
+ *                       "Wallet connection failed".
+ *   WalletConnect       Phone wallets, and desktop wallets without an extension.
+ *                       Needs a project id; omitted entirely when there is none,
+ *                       rather than offered and then failing on click.
+ *   Coinbase Wallet     Its own SDK, which also covers the Smart Wallet — no
+ *                       extension required.
  *
  * Robinhood Chain is the ONLY chain configured. wagmi will refuse to build a
  * transaction for a chain it does not know, which is a useful second line of defence
@@ -66,9 +81,33 @@ export function createWagmiConfig() {
     },
   );
 
+  // Offered only when configured. A WalletConnect connector built without a project id
+  // appears in the list and then fails the moment someone clicks it, which is worse
+  // than not offering it: the user cannot tell a missing setting from a broken wallet.
+  const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID?.trim();
+
   return createConfig({
     chains: [robinhoodChain],
-    connectors: [injected({ shimDisconnect: true })],
+    // `injected` is listed once; wagmi adds one entry per EIP-6963 wallet the browser
+    // announces, so this is a floor rather than the whole list.
+    connectors: [
+      injected({ shimDisconnect: true }),
+      coinbaseWallet({ appName: "STUNKS.FUN", preference: "all" }),
+      ...(projectId
+        ? [
+            walletConnect({
+              projectId,
+              showQrModal: true,
+              metadata: {
+                name: "STUNKS.FUN",
+                description: "Token launchpad and trading on Robinhood Chain",
+                url: process.env.NEXT_PUBLIC_APP_URL ?? "https://stunks.fun",
+                icons: [],
+              },
+            }),
+          ]
+        : []),
+    ],
     transports: {
       // 100 ms blocks mean viem's 4-second default polling would be slower than the
       // entire anti-snipe window a launch bundle has to land inside.

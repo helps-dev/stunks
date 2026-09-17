@@ -2510,3 +2510,54 @@ table.compact td {
   font-size: 0.7rem;
   line-height: 1.45;
 }
+
+/* Wallet picker: one row per wallet the browser announced, plus the configured ones. */
+.wallet-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.wallet-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.wallet-option:hover:not(:disabled) {
+  background: var(--surface-soft);
+}
+
+.wallet-option:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.wallet-option img {
+  border-radius: 5px;
+  flex-shrink: 0;
+}
+
+.wallet-option-blank {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: var(--surface-soft);
+  flex-shrink: 0;
+}

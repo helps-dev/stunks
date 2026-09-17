@@ -17,6 +17,7 @@
  * script loading from somewhere else or exfiltrating to it.
  */
 function securityHeaders() {
+  const isDev = process.env.NODE_ENV !== "production";
   // connect-src is derived from the SAME variable the wallet client reads, so an
   // endpoint added to one cannot be silently missing from the other. Getting this
   // wrong fails in the browser with nothing but a console message.
@@ -38,7 +39,17 @@ function securityHeaders() {
     // 'unsafe-inline' is required by the App Router, which emits inline bootstrap and
     // streaming-payload scripts. Removing it needs nonces threaded through middleware,
     // which is worth doing and is not free.
-    "script-src 'self' 'unsafe-inline'",
+    //
+    // 'unsafe-eval' in DEVELOPMENT ONLY. Next's dev bundler evaluates module code as
+    // strings, so without it the client bundle throws
+    //
+    //   EvalError: Evaluating a string as JavaScript violates the following
+    //   Content Security Policy directive: "script-src 'self' 'unsafe-inline'"
+    //
+    // React then never hydrates and every button on the site is inert — which is how
+    // this was found: a wallet picker that would not open. The production bundle does
+    // not use eval, so the directive stays strict where it matters.
+    `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self' data:",
@@ -55,7 +66,25 @@ function securityHeaders() {
     { key: "X-Content-Type-Options", value: "nosniff" },
     { key: "X-Frame-Options", value: "DENY" },
     { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
-    { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+    {
+      /**
+       * `same-origin-allow-popups`, not `same-origin`.
+       *
+       * Wallets sign in a popup and talk back to the page that opened it. Under strict
+       * `same-origin` that channel is severed, and the Coinbase Wallet SDK says so
+       * outright in the console:
+       *
+       *   Coinbase Wallet SDK requires the Cross-Origin-Opener-Policy header to not be
+       *   set to 'same-origin'.
+       *
+       * This variant keeps the protection that matters here — a cross-origin document
+       * that opens THIS page still gets no handle on it — while letting popups this
+       * page opens keep theirs. It is the value the popup-based auth and wallet flows
+       * are designed around.
+       */
+      key: "Cross-Origin-Opener-Policy",
+      value: "same-origin-allow-popups",
+    },
     {
       // Nothing here needs a camera, a microphone, a location or a payment handler.
       key: "Permissions-Policy",
