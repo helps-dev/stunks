@@ -44,13 +44,14 @@ describe("token image proxy", () => {
   });
 
   it("never sends a referrer upstream", async () => {
-    const fetchSpy = vi.fn(async () => imageResponse());
+    // Typed with fetch's own shape so the recorded call carries its init argument.
+    const fetchSpy = vi.fn(async (_url: string, _init?: RequestInit) => imageResponse());
     vi.stubGlobal("fetch", fetchSpy);
     await GET(request("https://img.koyen.fun/a.png"));
-    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
-    expect(init.referrerPolicy).toBe("no-referrer");
+    const init = fetchSpy.mock.calls[0]?.[1];
+    expect(init?.referrerPolicy).toBe("no-referrer");
     // Manual, so each hop is re-checked rather than followed by the implementation.
-    expect(init.redirect).toBe("manual");
+    expect(init?.redirect).toBe("manual");
   });
 
   it("tries the next gateway when one fails, for ipfs", async () => {
