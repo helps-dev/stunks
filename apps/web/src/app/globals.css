@@ -2512,6 +2512,27 @@ table.compact td {
 }
 
 /* Wallet picker: one row per wallet the browser announced, plus the configured ones. */
+
+/*
+ * In the header the list OVERLAYS the page; it must not take part in layout.
+ *
+ * Without this it sat in the normal flow, grew the header's flex row by its own
+ * height, and pushed the whole page down — leaving a tall black gap above the logo
+ * with the list floating in it. Eight wallets made the header about 400px tall.
+ */
+.wallet-compact {
+  position: relative;
+}
+
+.wallet-compact .wallet-picker {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 80;
+  min-width: 210px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55);
+}
+
 .wallet-picker {
   display: flex;
   flex-direction: column;
