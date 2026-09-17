@@ -13,6 +13,14 @@ Documentation=https://github.com/helps-dev/stunks/blob/main/docs/DEPLOY_VPS.md
 After=network-online.target
 Wants=network-online.target
 
+# Crash-loop backoff. These belong in [Unit]: systemd ignores them in [Service]
+# and says so in a line that is easy to miss, because the unit still loads and
+# every other directive works. Ignored, with Restart=always and RestartSec=5s,
+# a failing process restarted every five seconds forever — hammering the RPC
+# endpoints this was written to protect.
+StartLimitBurst=5
+StartLimitIntervalSec=120
+
 [Service]
 Type=simple
 User=ubuntu
@@ -30,8 +38,6 @@ ExecStart=/usr/bin/env pnpm exec next start --hostname 127.0.0.1 --port 3000
 
 Restart=always
 RestartSec=5s
-StartLimitBurst=5
-StartLimitIntervalSec=120
 
 NoNewPrivileges=true
 PrivateTmp=true
