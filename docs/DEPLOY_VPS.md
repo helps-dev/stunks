@@ -293,6 +293,16 @@ pnpm recompute:prices -- --apply
 sudo systemctl start stunks-indexer
 ```
 
+These run from the repository root and read `.env` themselves. That is not automatic:
+`PrismaClient` does not load `.env` — only the Prisma CLI does, which is why
+`pnpm prisma:generate` works and a plain script did not. Every `tsx` script here passes
+`--env-file-if-exists=.env` so it picks up the same file the systemd unit does, and
+still runs where there is no `.env` at all, such as in CI.
+
+Sourcing the file into your shell instead (`. ./.env`) is not equivalent and can fail
+outright — a connection string containing `&` is a background operator to the shell,
+but ordinary text to Node's parser.
+
 Deploying the web app before that is harmless — it only reads. Starting the NEW indexer
 before that is not: it writes 1e27 prices into a table of 1e18 ones, and the two are
 indistinguishable afterwards.
