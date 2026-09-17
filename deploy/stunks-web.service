@@ -27,8 +27,29 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/stunks/apps/web
 
-EnvironmentFile=/home/ubuntu/stunks/.env
+# PATH first, EnvironmentFile second — the ORDER is the point.
+#
+# systemd applies these in the order written and the last one wins, so a PATH set here
+# would override one set in .env. This way round the line below is a default and each
+# machine can correct it without editing a committed file.
+#
+# The default is deliberately plain, because no committed value can be right
+# everywhere: a Node installed by nvm lives under a VERSION-NUMBERED directory, and
+# pnpm installed by corepack lives beside whichever Node installed it. On one real
+# server `node` came from ~/.local/bin while `pnpm` came from an nvm v22 directory, and
+# neither was on this list. The service failed with status 127 — "command not found" —
+# which says nothing about which command.
+#
+# To get it right on a given machine, run this as the service user and put the result
+# in .env:
+#
+#   echo "PATH=$PATH" >> ~/stunks/.env
+#
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Credentials come from the file, never from this unit — this file is committed.
+# It may also carry PATH, which then overrides the default above.
+EnvironmentFile=/home/ubuntu/stunks/.env
 Environment=NODE_ENV=production
 Environment=NEXT_TELEMETRY_DISABLED=1
 

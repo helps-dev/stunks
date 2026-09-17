@@ -69,6 +69,29 @@ resumes exactly where it stopped rather than rescanning.
 
 Content was rephrased for compliance with licensing restrictions.
 
+## When the service exits with status 127
+
+`status=127` is the shell's code for "command not found", and systemd reports it
+without saying which command. It is almost always `pnpm` or `node` not being on the
+service's PATH — which is not the same PATH your shell has.
+
+```bash
+sudo systemctl stop stunks-indexer
+which pnpm && readlink -f "$(which pnpm)"
+echo "PATH=$PATH" >> ~/stunks/.env      # as the service user
+sudo systemctl start stunks-indexer
+```
+
+The unit sets a plain default PATH and then reads `.env`, in that order, so the line
+you just appended wins. Nothing machine-specific ends up in a committed file.
+
+Why no default can cover it: nvm installs Node under a version-numbered directory, and
+corepack installs pnpm beside whichever Node installed it. On one real server `node`
+came from `~/.local/bin` while `pnpm` came from an nvm v22 directory — a combination
+that works perfectly when typed by hand and is invisible to systemd.
+
+---
+
 ## Keeping the database inside its size limit
 
 This chain produces about 27 MB of raw trade rows an hour (R42), so a 512 MB database
