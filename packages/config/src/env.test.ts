@@ -135,3 +135,41 @@ describe("chain definition", () => {
     expect(ZERO_ADDRESS).toMatch(/^0x0{40}$/);
   });
 });
+
+describe("NEXT_PUBLIC_OFFICIAL_TOKEN", () => {
+  const base = {
+    NEXT_PUBLIC_RPC_ENDPOINTS: "https://robinhood.drpc.org",
+    NEXT_PUBLIC_PONS_V2_FACTORY: "0x7eD598BcEf8bd9Edd8C97A195C6d13f40801EC7e",
+  };
+
+  it("is absent when unset", () => {
+    expect(loadClientEnv(base).NEXT_PUBLIC_OFFICIAL_TOKEN).toBeUndefined();
+  });
+
+  it("treats an empty value as absent", () => {
+    // So the variable can sit blank in a deployment's settings until launch day,
+    // rather than needing a code change then.
+    expect(
+      loadClientEnv({ ...base, NEXT_PUBLIC_OFFICIAL_TOKEN: "" }).NEXT_PUBLIC_OFFICIAL_TOKEN,
+    ).toBeUndefined();
+    expect(
+      loadClientEnv({ ...base, NEXT_PUBLIC_OFFICIAL_TOKEN: "   " })
+        .NEXT_PUBLIC_OFFICIAL_TOKEN,
+    ).toBeUndefined();
+  });
+
+  it("accepts an address", () => {
+    const address = "0xF8767D5e0976782a4CD9410E688F1383aBc1cc70";
+    expect(
+      loadClientEnv({ ...base, NEXT_PUBLIC_OFFICIAL_TOKEN: address })
+        .NEXT_PUBLIC_OFFICIAL_TOKEN,
+    ).toBe(address);
+  });
+
+  it("refuses a value that is not an address", () => {
+    // A typo here would spotlight nothing, silently. Better to fail the boot.
+    expect(() =>
+      loadClientEnv({ ...base, NEXT_PUBLIC_OFFICIAL_TOKEN: "stunks" }),
+    ).toThrow(/valid EVM address/);
+  });
+});

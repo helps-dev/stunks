@@ -12,6 +12,10 @@ import { defineConfig } from "vitest/config";
  * browser or the chain belong here; everything else is covered where it lives.
  */
 export default defineConfig({
+  // Next sets `jsx: "preserve"` for its own compiler, which esbuild cannot execute.
+  // Tests that render a component need real JSX output, so it is set here instead of
+  // changing the app's tsconfig.
+  esbuild: { jsx: "automatic" },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

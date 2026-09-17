@@ -78,6 +78,27 @@ export const clientEnvSchema = z.object({
   NEXT_PUBLIC_RPC_ENDPOINTS: endpointListSchema,
   NEXT_PUBLIC_PONS_V2_FACTORY: addressSchema,
   NEXT_PUBLIC_APP_URL: z.string().url().default("http://localhost:3000"),
+  /**
+   * The project's own token, given a spotlight above the explore grid.
+   *
+   * Optional, and absent is the normal state: before a launch there is no such token,
+   * and the spotlight simply does not render. An empty string is treated as absent so
+   * the variable can sit in a deployment's settings, blank, until the day it is
+   * needed — otherwise setting it up would require a code change on launch day.
+   *
+   * Pointing it at an address the indexer has not reached yet renders nothing rather
+   * than an empty frame. The spotlight shows indexed figures, so it can only appear
+   * once there are indexed figures to show.
+   */
+  NEXT_PUBLIC_OFFICIAL_TOKEN: z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => (value === undefined || value === "" ? undefined : value))
+    .refine((value) => value === undefined || isAddress(value), {
+      message: "must be a valid EVM address, or left unset",
+    })
+    .transform((value) => value as `0x${string}` | undefined),
 });
 
 export type ClientEnv = z.infer<typeof clientEnvSchema>;

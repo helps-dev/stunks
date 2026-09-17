@@ -2,6 +2,8 @@ import type { ExploreSort } from "@stunks/database";
 import { formatCompact } from "@stunks/utils";
 import { exploreTokens, platformStats } from "@/lib/queries";
 import { TokenCard } from "@/components/token-card";
+import { OfficialTokenSpotlight } from "@/components/official-token";
+import { officialToken } from "@/lib/official-token";
 
 /**
  * Explore.
@@ -37,7 +39,7 @@ export default async function ExplorePage({ searchParams }: PageProps) {
   const search = typeof params.q === "string" ? params.q : undefined;
   const cursor = typeof params.cursor === "string" ? params.cursor : undefined;
 
-  const [result, stats] = await Promise.all([
+  const [result, stats, official] = await Promise.all([
     exploreTokens({
       sort,
       limit: PAGE_SIZE,
@@ -50,7 +52,25 @@ export default async function ExplorePage({ searchParams }: PageProps) {
       chainHead: null,
     }),
     platformStats(),
+    officialToken(),
   ]);
+
+  /**
+   * The official token is pinned to the front of the FIRST page only, and removed from
+   * wherever the sort would otherwise have put it.
+   *
+   * `cursor === undefined` is what identifies the first page. Pinning it on every page
+   * would push it above results the visitor paged forward to find, and a search must
+   * keep returning what was searched for — so neither case pins.
+   */
+  const pinned =
+    official !== null && cursor === undefined && search === undefined
+      ? official.card
+      : null;
+  const visibleTokens =
+    pinned === null
+      ? result.tokens
+      : result.tokens.filter((token) => token.address !== pinned.address);
 
 
   return (
@@ -67,6 +87,8 @@ export default async function ExplorePage({ searchParams }: PageProps) {
           reached.
         </p>
       </section>
+
+      {official !== null && <OfficialTokenSpotlight token={official} />}
 
       <div className="statsrow explore-stats">
         <Stat label="Tokens indexed" value={stats.tokenCount.toLocaleString("en-US")} />
@@ -152,7 +174,18 @@ export default async function ExplorePage({ searchParams }: PageProps) {
         ) : (
           <>
             <div className="cardgrid">
-              {result.tokens.map((token) => (
+              {/*
+                The official token is pinned to the front of the first page and removed
+                from its natural position, so it appears once rather than twice.
+
+                Only the first page: pinning it on every page would put it above
+                results the visitor paged forward to see, and a token that is always
+                first stops being information. The sort still decides everything else,
+                so a visitor sorting by volume gets a real volume ranking with one
+                declared exception at the top.
+              */}
+              {pinned !== null && <TokenCard key={pinned.address} token={pinned} />}
+              {visibleTokens.map((token) => (
                 <TokenCard key={token.address} token={token} />
               ))}
             </div>

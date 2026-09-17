@@ -1303,3 +1303,37 @@ and why the CSP built from `NEXT_PUBLIC_RPC_ENDPOINTS` in `next.config.mjs` is c
 Declaring them anyway would put `DATABASE_URL` into the cache key of tasks that never
 read it, so a pooled-host change would invalidate unrelated builds. The warning is
 left in place rather than silenced by a change that would make caching worse.
+
+## R49 — Holder counts are never computed, and every token reports zero
+
+**Status: open, and now hidden rather than shown.** `Token.holderCount` is 0 on all
+28,701 indexed tokens and the `holders` table has zero rows. Nothing writes either:
+`TradeBatchRepository` reads `holderCount` from the token row and writes the same value
+back, so the column round-trips its default forever.
+
+This is R41 again in a different column. A number that is structurally always zero
+looks exactly like a number that happens to be zero, and a token page showing
+"0 holders" next to 19 trades is a claim, not a blank.
+
+The official-token spotlight renders the tile only when the count is above zero, so it
+does not put "0 holders" under the site's own coin. The token detail page's holders
+section has the same problem and is untouched here — it predates this work.
+
+Fixing it properly means indexing ERC-20 `Transfer` events for every launched token,
+which is a third log stream on a chain that already has the indexer 38M blocks behind
+on two (R39). It is a real feature, not an oversight to patch.
+
+## R50 — Aggregate history is far shorter than the windows built on it
+
+**Status: needs a cron.** `volume_snapshots` held 15 hours of history in total when the
+spotlight was built, because `rollup:aggregates` has only been run by hand. Anything
+reading a 24-hour window off that table — the trending score, the spotlight's price
+change — silently finds nothing and reports nothing.
+
+The spotlight now measures whatever window exists and labels it with its real width
+("15H change", not "24H change"), so it degrades honestly rather than disappearing. The
+trending score does not: it returns an empty cohort.
+
+The fix is scheduling, not code. `score:trending` → `rollup:aggregates` → `prune:trades`
+need to run periodically, in that order, and the order matters: pruning before the
+rollup destroys the trades the rollup was going to aggregate.

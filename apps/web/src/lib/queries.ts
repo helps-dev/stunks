@@ -50,7 +50,12 @@ export interface SerialisedToken {
   readonly lastTradeAt: string | null;
 }
 
-function serialiseToken(token: TokenSummary): SerialisedToken {
+/**
+ * Exported so the official-token spotlight can build a pinned card from a detail row
+ * without a second, slightly different copy of this mapping. Two mappings for one
+ * shape is how a card ends up showing a stale field on one surface only.
+ */
+export function serialiseToken(token: TokenSummary): SerialisedToken {
   return {
     address: token.address,
     name: token.name,
