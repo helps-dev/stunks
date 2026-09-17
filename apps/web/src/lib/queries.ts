@@ -84,6 +84,13 @@ export interface ExploreResult {
   readonly nextCursor: string | null;
   readonly hasMore: boolean;
   readonly staleness: IndexerStaleness;
+  /**
+   * False when the trending sort was asked for and no token carries a score.
+   *
+   * The result set looks identical either way — a list of tokens — so without this
+   * the page would present an arbitrary order as a ranking.
+   */
+  readonly trendingScored: boolean;
 }
 
 /**
@@ -123,6 +130,11 @@ export async function exploreTokens(args: {
     nextCursor: page.nextCursor,
     hasMore: page.hasMore,
     staleness: await readStaleness(args.chainHead),
+    // Only asked when it can change what the page says, which is the trending sort.
+    trendingScored:
+      args.sort === "TRENDING"
+        ? await repos.explore.anyTrendingScore(ROBINHOOD_CHAIN_ID)
+        : true,
   };
 }
 

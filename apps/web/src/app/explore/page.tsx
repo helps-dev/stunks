@@ -144,6 +144,27 @@ export default async function ExplorePage({ searchParams }: PageProps) {
         </div>
       </div>
 
+      {/*
+        The trending sort orders by a column nothing writes, so every row holds 0 and
+        the result degenerates to an arbitrary order. A list of tokens looks the same
+        either way, which is exactly why it has to be said rather than shown.
+      */}
+      {!result.trendingScored && (
+        <div className="indexer-status stale">
+          <span className="indexer-status-icon">!</span>
+          <div>
+            <strong>Trending is not scored yet</strong>
+            <p>
+              No token carries a trending score, so this list is ordered arbitrarily and
+              is not a ranking. Scoring needs a periodic pass over the whole cohort, and
+              it needs the curve stream close to the head — a 24-hour window computed over
+              trades that end a day ago would rank nothing meaningful. Sort by volume,
+              market cap or graduation progress in the meantime.
+            </p>
+          </div>
+        </div>
+      )}
+
       <section className="explore-browse">
         <div className="section-heading">
           <div>

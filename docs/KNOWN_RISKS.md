@@ -1074,3 +1074,42 @@ each token's own quote asset, and Explore sorts and sums them together. A cap in
 8-decimal units and one in ETH base units are not comparable, and `totalVolume` adds
 them. The truncation is fixed; this is a separate product question about what a
 cross-asset market cap should mean, and it is not answered here.
+
+---
+
+## R41 — M — "Trending" ranked by a column nothing writes
+
+`packages/database/src/trending.ts` implements the PRD's trending score — 30% volume
+acceleration, 25% unique traders, 20% trade activity, 15% buy pressure, 10% market-cap
+growth, normalised against the cohort, capped against wash trading, integers
+throughout. It is 206 lines, it is covered by tests, and it is exported from the
+package.
+
+**It has no caller.** `scoreTrending` is never invoked by any write path, so
+`Token.trendingScore` holds its default of `0` for all 23,179 rows.
+
+`ExploreRepository.orderFor` sorts `TRENDING` by `[{ trendingScore: desc }, { id: desc }]`.
+With every score equal, that degenerates to `id desc` — cuid order, which is arbitrary
+to a reader. The Trending tab was therefore showing an arbitrary list as a ranking, and
+a list of tokens looks identical either way.
+
+**Why it is not simply wired up.** Two reasons, and the second is the binding one:
+
+1. The score is _cohort-relative_ — every component is normalised against the set being
+   ranked — so it cannot be computed incrementally by the curve processor, which only
+   sees the tokens touched in one window. It needs a periodic pass over the whole
+   cohort.
+2. It needs the curve stream near the head. The score's primary input is volume in a
+   recent window against the window before it, and the curve stream is ~27 hours
+   behind. A 24-hour window computed over trades that end a day ago would rank nothing
+   meaningful — it would look computed, which is worse than looking empty.
+
+So the ranking is not fabricated in the meantime. `anyTrendingScore` asks whether any
+token carries a score, and the Explore page says plainly that the list is not a ranking
+when none does, in the same idiom as the holder table and the freshness banner.
+
+**To finish it:** cover the history (R39), let the curve stream reach the head (R3),
+then add a periodic job calling `scoreTrending` over the active cohort. Its inputs are
+all derivable from `trades` — recent and prior window volume, distinct traders, trade
+count, buy and sell volume — except `priorMarketCap`, which wants the `VolumeSnapshot`
+table that exists in the schema and is not yet written.

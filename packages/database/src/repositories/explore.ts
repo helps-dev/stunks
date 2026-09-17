@@ -114,6 +114,11 @@ function orderFor(sort: ExploreSort): Prisma.TokenOrderByWithRelationInput[] {
     case "GRADUATING":
       return [{ graduationBps: "desc" }, { id: "desc" }];
     case "TRENDING":
+      // Sorts a column nothing currently writes. `scoreTrending` in ../trending.ts
+      // computes it and is covered by tests, but it has no caller, so every row holds
+      // the default 0 and this degenerates to `id desc` — an arbitrary order shown to
+      // the user as "trending". `anyTrendingScore` exists so the UI can say so instead
+      // of presenting it as a ranking. See R41.
       return [{ trendingScore: "desc" }, { id: "desc" }];
     case "LAST_TRADE":
       return [{ lastTradeAt: "desc" }, { id: "desc" }];
@@ -341,6 +346,22 @@ export class ExploreRepository {
         decimals: group.pairTokenDecimals,
         launchCount: group._count._all,
       }));
+  }
+
+  /**
+   * Whether any token carries a trending score at all.
+   *
+   * Cheap: `(chainId, trendingScore desc)` is indexed, and the answer is whatever the
+   * first row says. Asked so the UI can distinguish "nothing is trending" from
+   * "nothing has been scored", which look identical in the result set and mean
+   * entirely different things.
+   */
+  async anyTrendingScore(chainId: number): Promise<boolean> {
+    const top = await this.prisma.token.findFirst({
+      where: { chainId, trendingScore: { gt: 0 } },
+      select: { id: true },
+    });
+    return top !== null;
   }
 
   /** How far behind the indexer is, so the UI can be honest about staleness. */
